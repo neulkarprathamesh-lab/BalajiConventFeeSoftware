@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+@layer base {
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 217 91% 60%;
+    --radius: 0.375rem;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    font-feature-settings: 'tnum' 1;
+  }
+  h1, h2, h3, h4, .font-heading { font-family: 'Work Sans', system-ui, sans-serif; }
+  .font-mono, code { font-family: 'IBM Plex Mono', monospace; }
+  .tabular { font-variant-numeric: tabular-nums; }
+}
+
+/* Print styles for receipts */
+@media print {
+  .no-print { display: none !important; }
+  body { background: white !important; }
+  .print-page { box-shadow: none !important; border: none !important; margin: 0 !important; }
+}
+
+.dense-table th, .dense-table td { padding: 8px 12px; font-size: 13px; }
+.dense-table thead { background: #F1F5F9; position: sticky; top: 0; }
+.dense-table tbody tr:nth-child(even) { background: #F8FAFC; }
+.dense-table tbody tr:hover { background: #EFF6FF; }

@@ -1,0 +1,1463 @@
+[
+  {
+    "medium": "English Medium",
+    "class_name": "Nursery",
+    "applies_to": "all",
+    "admission_fee": 3500,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 6500,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2100,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2200,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2200,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26)"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "KG I",
+    "applies_to": "new_only",
+    "admission_fee": 6000,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 6800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2200,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2300,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2300,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "KG I",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 3700,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 6800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2200,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2300,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2300,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "KG II",
+    "applies_to": "new_only",
+    "admission_fee": 6500,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 7200,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2400,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2400,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2400,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "KG II",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 4000,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 7200,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2400,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2400,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2400,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 1",
+    "applies_to": "new_only",
+    "admission_fee": 7700,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 7800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2600,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2600,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2600,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 1",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 4200,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 7800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2600,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2600,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2600,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 2",
+    "applies_to": "new_only",
+    "admission_fee": 7700,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 7800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2600,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2600,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2600,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 2",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 4200,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 7800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2600,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2600,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2600,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 3",
+    "applies_to": "new_only",
+    "admission_fee": 8000,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 8300,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2700,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2800,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2800,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 3",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 4500,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 8300,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2700,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2800,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2800,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 4",
+    "applies_to": "new_only",
+    "admission_fee": 8000,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 8300,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2700,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2800,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2800,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 4",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 4500,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 8300,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2700,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2800,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2800,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 5",
+    "applies_to": "new_only",
+    "admission_fee": 8500,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 8800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2900,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2900,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 3000,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 5",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 4700,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 8800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2900,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2900,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 3000,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 6",
+    "applies_to": "new_only",
+    "admission_fee": 8500,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 8800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2900,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2900,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 3000,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 6",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 4700,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 8800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2900,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2900,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 3000,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 7",
+    "applies_to": "new_only",
+    "admission_fee": 9500,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 10300,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 3400,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 3400,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 3500,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 7",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 5000,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 10300,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 3400,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 3400,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 3500,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 8",
+    "applies_to": "new_only",
+    "admission_fee": 9500,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 10300,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 3400,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 3400,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 3500,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "English Medium",
+    "class_name": "Class 8",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 5000,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 10300,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 3400,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 3400,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 3500,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.1 (Balaji Convent, English Medium, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Junior Shishuvihar",
+    "applies_to": "all",
+    "admission_fee": 1200,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 3000,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1000,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1000,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1000,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26)"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Senior Shishuvihar",
+    "applies_to": "new_only",
+    "admission_fee": 1700,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 3300,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1100,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1100,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1100,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Senior Shishuvihar",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 1200,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 3300,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1100,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1100,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1100,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Balwadi",
+    "applies_to": "new_only",
+    "admission_fee": 1800,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 3800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1200,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1300,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1300,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Balwadi",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 1400,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 3800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1200,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1300,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1300,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 1",
+    "applies_to": "new_only",
+    "admission_fee": 1900,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 4300,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1400,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1400,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1500,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 1",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 1700,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 4300,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1400,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1400,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1500,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 2",
+    "applies_to": "new_only",
+    "admission_fee": 2200,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 4800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1600,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1600,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1600,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 2",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 1900,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 4800,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1600,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1600,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1600,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 3",
+    "applies_to": "new_only",
+    "admission_fee": 2400,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 4900,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1600,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1600,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1700,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 3",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 2200,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 4900,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1600,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1600,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1700,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 4",
+    "applies_to": "new_only",
+    "admission_fee": 2700,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 5100,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1700,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1700,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1700,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 4",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 2400,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 5100,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1700,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1700,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1700,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 5",
+    "applies_to": "new_only",
+    "admission_fee": 3200,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 5500,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1800,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1800,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1900,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 5",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 2700,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 5500,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1800,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1800,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1900,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 6",
+    "applies_to": "new_only",
+    "admission_fee": 3200,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 5500,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1800,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1800,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1900,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 6",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 2700,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 5500,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 1800,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 1800,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 1900,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 7",
+    "applies_to": "new_only",
+    "admission_fee": 4000,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 6200,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2100,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2100,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2000,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 7",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 3000,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 6200,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2100,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2100,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2000,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 8",
+    "applies_to": "new_only",
+    "admission_fee": 4000,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 6200,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2100,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2100,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2000,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: new-admission row - admission fee only, no continuation fee]"
+  },
+  {
+    "medium": "Semi Medium (Marathi)",
+    "class_name": "Class 8",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 3000,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 6200,
+    "tuition_installments": [
+      {
+        "name": "Tuition I",
+        "amount": 2100,
+        "due_date": "2025-08-01"
+      },
+      {
+        "name": "Tuition II",
+        "amount": 2100,
+        "due_date": "2025-10-01"
+      },
+      {
+        "name": "Tuition III",
+        "amount": 2000,
+        "due_date": "2026-01-01"
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.2 (Balaji Convent Primary School, Marathi Semi, Fees Structure 2025-26) [split: continuing-student row - continuation fee only, no admission fee]"
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 11",
+    "stream": "Arts",
+    "applies_to": "all",
+    "admission_fee": 500,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3, ADMISSION FEES TABLE 2025-26 table 1, 11th row"
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 11",
+    "stream": "Commerce",
+    "applies_to": "all",
+    "admission_fee": 1000,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 1000,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 1000,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3, ADMISSION FEES TABLE 2025-26 table 1, 11th row"
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 11",
+    "stream": "Science",
+    "applies_to": "all",
+    "admission_fee": 3000,
+    "continuation_fee": 0,
+    "term_fee": 3000,
+    "practical_fee": 0,
+    "tuition_total": 8500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 8500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3, ADMISSION FEES TABLE 2025-26 table 1, 11th row"
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 11",
+    "stream": "Electronics",
+    "applies_to": "all",
+    "admission_fee": 3000,
+    "continuation_fee": 0,
+    "term_fee": 3000,
+    "practical_fee": 0,
+    "tuition_total": 9500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 9500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3, ADMISSION FEES TABLE 2025-26 table 1, 11th row"
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 11",
+    "stream": "Fisheries",
+    "applies_to": "all",
+    "admission_fee": 3000,
+    "continuation_fee": 0,
+    "term_fee": 3000,
+    "practical_fee": 0,
+    "tuition_total": 9500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 9500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3, ADMISSION FEES TABLE 2025-26 table 1, 11th row"
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 12",
+    "stream": "Arts",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 1500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 1500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3 table 1, 12th row, continuing students. Source publishes one combined '12th Electronics & Fishery' line (term 4000, tuition 10500, total 14500); applied identically to Electronics and Fisheries streams since the source does not split them."
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 12",
+    "stream": "Commerce",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 2500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 2500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3 table 1, 12th row, continuing students. Source publishes one combined '12th Electronics & Fishery' line (term 4000, tuition 10500, total 14500); applied identically to Electronics and Fisheries streams since the source does not split them."
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 12",
+    "stream": "Science",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 0,
+    "term_fee": 4000,
+    "practical_fee": 0,
+    "tuition_total": 10500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 10500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3 table 1, 12th row, continuing students. Source publishes one combined '12th Electronics & Fishery' line (term 4000, tuition 10500, total 14500); applied identically to Electronics and Fisheries streams since the source does not split them."
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 12",
+    "stream": "Electronics",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 0,
+    "term_fee": 4000,
+    "practical_fee": 0,
+    "tuition_total": 10500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 10500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3 table 1, 12th row, continuing students. Source publishes one combined '12th Electronics & Fishery' line (term 4000, tuition 10500, total 14500); applied identically to Electronics and Fisheries streams since the source does not split them."
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 12",
+    "stream": "Fisheries",
+    "applies_to": "returning_only",
+    "admission_fee": 0,
+    "continuation_fee": 0,
+    "term_fee": 4000,
+    "practical_fee": 0,
+    "tuition_total": 10500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 10500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3 table 1, 12th row, continuing students. Source publishes one combined '12th Electronics & Fishery' line (term 4000, tuition 10500, total 14500); applied identically to Electronics and Fisheries streams since the source does not split them."
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 12",
+    "stream": "Arts",
+    "applies_to": "new_only",
+    "admission_fee": 1000,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 2000,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 2000,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3, 'New Admission in 12th Class Fees 2025-2026' table. Source publishes one combined 'Science & Electronics' row; applied identically to Science, Electronics and Fisheries streams since the source does not split them further. A.T.K.T. admission (11th Arts only) is a separate special fee of Rs. 2500 noted on the source and is NOT represented as a fee-structure row here."
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 12",
+    "stream": "Commerce",
+    "applies_to": "new_only",
+    "admission_fee": 1500,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 0,
+    "tuition_total": 2500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 2500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3, 'New Admission in 12th Class Fees 2025-2026' table. Source publishes one combined 'Science & Electronics' row; applied identically to Science, Electronics and Fisheries streams since the source does not split them further. A.T.K.T. admission (11th Arts only) is a separate special fee of Rs. 2500 noted on the source and is NOT represented as a fee-structure row here."
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 12",
+    "stream": "Science",
+    "applies_to": "new_only",
+    "admission_fee": 3000,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 3500,
+    "tuition_total": 11500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 11500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3, 'New Admission in 12th Class Fees 2025-2026' table. Source publishes one combined 'Science & Electronics' row; applied identically to Science, Electronics and Fisheries streams since the source does not split them further. A.T.K.T. admission (11th Arts only) is a separate special fee of Rs. 2500 noted on the source and is NOT represented as a fee-structure row here."
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 12",
+    "stream": "Electronics",
+    "applies_to": "new_only",
+    "admission_fee": 3000,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 3500,
+    "tuition_total": 11500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 11500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3, 'New Admission in 12th Class Fees 2025-2026' table. Source publishes one combined 'Science & Electronics' row; applied identically to Science, Electronics and Fisheries streams since the source does not split them further. A.T.K.T. admission (11th Arts only) is a separate special fee of Rs. 2500 noted on the source and is NOT represented as a fee-structure row here."
+  },
+  {
+    "medium": "Junior College",
+    "class_name": "Class 12",
+    "stream": "Fisheries",
+    "applies_to": "new_only",
+    "admission_fee": 3000,
+    "continuation_fee": 0,
+    "term_fee": 0,
+    "practical_fee": 3500,
+    "tuition_total": 11500,
+    "tuition_installments": [
+      {
+        "name": "Tuition",
+        "amount": 11500,
+        "due_date": null
+      }
+    ],
+    "notes": "Source: Scanned Document 9.pdf p.3, 'New Admission in 12th Class Fees 2025-2026' table. Source publishes one combined 'Science & Electronics' row; applied identically to Science, Electronics and Fisheries streams since the source does not split them further. A.T.K.T. admission (11th Arts only) is a separate special fee of Rs. 2500 noted on the source and is NOT represented as a fee-structure row here."
+  }
+]
