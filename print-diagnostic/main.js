@@ -71,18 +71,19 @@ ipcMain.handle('print-test', async (event, opts = {}) => {
   // HP host-based GDI drivers (M1005 / P1007) honour these very differently,
   // so the tool can try several and record which one prints correctly.
   const LW = m.wmm, LH = m.hmm; // landscape media dims (A5: 210x148, A4: 297x210)
-  const mode = (opts.mode || 'landscape-media');
+  // Single rotation control the cashier changes until the receipt prints upright & complete.
+  // 90/270 use the printer's NATIVE portrait A5/A4 form (no custom size, no scaling) with the
+  // artwork pre-rotated -> most reliable on HP host-based GDI drivers. Load paper VERTICALLY.
+  // 0/180 use an explicit landscape page size -> load paper HORIZONTALLY.
+  const mode = (opts.mode || 'rot-90');
+  const nx = Number.isFinite(+opts.nudgeX) ? +opts.nudgeX : 0;  // page-space nudge mm, +right / -left
+  const ny = Number.isFinite(+opts.nudgeY) ? +opts.nudgeY : 0;  // page-space nudge mm, +down / -up
   let pagew, pageh, rot, landscape, pageSize;
-  if (mode === 'landscape-flag') {           // legacy: named size + landscape flag (the original, wrong on M1005)
-    pagew = LW; pageh = LH; rot = 0; landscape = true; pageSize = m.pageSizeName;
-  } else if (mode === 'rotate-cw') {          // portrait sheet, artwork pre-rotated 90° CW, no landscape flag
-    pagew = LH; pageh = LW; rot = 90; landscape = false;
-    pageSize = { width: Math.round(LH * 1000), height: Math.round(LW * 1000) };
-  } else if (mode === 'rotate-ccw') {         // portrait sheet, artwork pre-rotated 90° CCW, no landscape flag
-    pagew = LH; pageh = LW; rot = 270; landscape = false;
-    pageSize = { width: Math.round(LH * 1000), height: Math.round(LW * 1000) };
-  } else {                                    // 'landscape-media' (default): explicit landscape page, NO landscape flag
-    pagew = LW; pageh = LH; rot = 0; landscape = false;
+  if (mode === 'rot-90' || mode === 'rot-270') {
+    pagew = LH; pageh = LW; rot = (mode === 'rot-90') ? 90 : 270; landscape = false;
+    pageSize = m.pageSizeName;                        // native A5/A4 portrait form (no scaling)
+  } else {
+    pagew = LW; pageh = LH; rot = (mode === 'rot-180') ? 180 : 0; landscape = false;
     pageSize = { width: Math.round(LW * 1000), height: Math.round(LH * 1000) };
   }
 
@@ -101,7 +102,7 @@ ipcMain.handle('print-test', async (event, opts = {}) => {
   });
   const url = 'file://' + path.join(__dirname, 'renderer', 'receipt.html') +
     `?source=${encodeURIComponent(source)}&printer=${encodeURIComponent(deviceName || '-')}&ts=${encodeURIComponent(diag.timestampIso)}` +
-    `&markers=${opts.markers ? 'on' : 'off'}&pagew=${pagew}&pageh=${pageh}&rot=${rot}`;
+    `&markers=${opts.markers ? 'on' : 'off'}&pagew=${pagew}&pageh=${pageh}&rot=${rot}&nx=${nx}&ny=${ny}`;
 
   try {
     await printWin.loadURL(url);
@@ -136,7 +137,7 @@ ipcMain.handle('print-test', async (event, opts = {}) => {
     diag.request = {
       selectedPrinter: deviceName, applicationPaperSource: source, printMode: mode,
       artworkWidthMm: 210, artworkHeightMm: 142.8, physicalMediaWidthMm: m.wmm, physicalMediaHeightMm: m.hmm,
-      pageWidthMm: pagew, pageHeightMm: pageh, contentRotationDeg: rot, orientationFlag: landscape,
+      pageWidthMm: pagew, pageHeightMm: pageh, contentRotationDeg: rot, nudgeXmm: nx, nudgeYmm: ny, orientationFlag: landscape,
       margins: 'none', scale: '100% (no fit-to-page)',
       pageSize: pageSize, silent: true, deviceName, ipcParams: printOptions,
     };

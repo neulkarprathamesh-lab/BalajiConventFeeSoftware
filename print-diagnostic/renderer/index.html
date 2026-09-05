@@ -47,18 +47,28 @@
       <option value="A4">A4 (210 × 297 mm)</option>
     </select>
 
-    <label>Print Mode (try these to find what your printer honours)</label>
+    <label>Rotation — change until the receipt prints upright &amp; complete (applies to the next PRINT)</label>
     <select id="mode" data-testid="diag-mode">
-      <option value="landscape-media">Landscape page · no rotate flag (best for HORIZONTAL loading)</option>
-      <option value="rotate-cw">Portrait sheet · artwork rotated 90° CW</option>
-      <option value="rotate-ccw">Portrait sheet · artwork rotated 90° CCW</option>
-      <option value="landscape-flag">Legacy: named size + landscape flag (original)</option>
+      <option value="rot-90">90° — Portrait sheet, native A5 (load paper VERTICALLY) · recommended</option>
+      <option value="rot-270">270° — Portrait sheet, flipped (load paper VERTICALLY)</option>
+      <option value="rot-0">0° — Landscape sheet (load paper HORIZONTALLY)</option>
+      <option value="rot-180">180° — Landscape sheet, flipped (load paper HORIZONTALLY)</option>
     </select>
 
-    <label>Orientation</label>
-    <div class="fixed">LANDSCAPE</div>
+    <label>Nudge — move the receipt on the sheet (mm) · applies to the next PRINT</label>
+    <div class="nudge-row" style="display:flex;gap:8px">
+      <div style="flex:1">
+        <div class="mini">Up(−) / Down(+)</div>
+        <input type="number" id="nudgeY" data-testid="diag-nudge-y" value="0" step="1" style="width:100%">
+      </div>
+      <div style="flex:1">
+        <div class="mini">Left(−) / Right(+)</div>
+        <input type="number" id="nudgeX" data-testid="diag-nudge-x" value="0" step="1" style="width:100%">
+      </div>
+    </div>
+
     <label>Artwork</label>
-    <div class="fixed">210 × 142.8 mm (fixed, letterboxed)</div>
+    <div class="fixed">210 × 142.8 mm (fixed, letterboxed — no scaling)</div>
     <label>Physical Media</label>
     <div class="fixed" id="physFixed">A5 210 × 148 mm</div>
 
@@ -141,17 +151,23 @@
 
   function modeGeom(src, mode){
     var LW = (src==='A4')?297:210, LH = (src==='A4')?210:148;
-    if(mode==='rotate-cw')  return { pw:LH, ph:LW, rot:90 };
-    if(mode==='rotate-ccw') return { pw:LH, ph:LW, rot:270 };
-    return { pw:LW, ph:LH, rot:0 }; // landscape-media & landscape-flag both render an upright landscape page
+    if(mode==='rot-90')  return { pw:LH, ph:LW, rot:90 };
+    if(mode==='rot-270') return { pw:LH, ph:LW, rot:270 };
+    if(mode==='rot-180') return { pw:LW, ph:LH, rot:180 };
+    return { pw:LW, ph:LH, rot:0 };
+  }
+  function nudgeVals(){
+    var nx = parseFloat(document.getElementById('nudgeX').value); if(isNaN(nx)) nx=0;
+    var ny = parseFloat(document.getElementById('nudgeY').value); if(isNaN(ny)) ny=0;
+    return { nx:nx, ny:ny };
   }
 
   function showPreview(){
     var src = document.getElementById('source').value;
     var mode = document.getElementById('mode').value;
     document.getElementById('physFixed').textContent = PHYS[src];
-    var g = modeGeom(src, mode);
-    var url = 'receipt.html?source='+encodeURIComponent(src)+'&printer='+encodeURIComponent(document.getElementById('printer').value||'—')+'&markers='+(document.getElementById('markers').checked?'on':'off')+'&pagew='+g.pw+'&pageh='+g.ph+'&rot='+g.rot+'&ts='+encodeURIComponent(new Date().toISOString());
+    var g = modeGeom(src, mode); var n = nudgeVals();
+    var url = 'receipt.html?source='+encodeURIComponent(src)+'&printer='+encodeURIComponent(document.getElementById('printer').value||'—')+'&markers='+(document.getElementById('markers').checked?'on':'off')+'&pagew='+g.pw+'&pageh='+g.ph+'&rot='+g.rot+'&nx='+n.nx+'&ny='+n.ny+'&ts='+encodeURIComponent(new Date().toISOString());
     // Scale the iframe to the page aspect ratio (screen preview only; physical ratio stays exact).
     var w = g.pw, h = g.ph;
     var pxPerMm = 3.7795, scale = 0.72;
@@ -168,15 +184,18 @@
   }
 
   document.getElementById('btnPreview').addEventListener('click', showPreview);
-  document.getElementById('source').addEventListener('change', function(){ document.getElementById('physFixed').textContent = PHYS[this.value]; });
+  document.getElementById('source').addEventListener('change', showPreview);
   document.getElementById('mode').addEventListener('change', showPreview);
+  document.getElementById('nudgeX').addEventListener('change', showPreview);
+  document.getElementById('nudgeY').addEventListener('change', showPreview);
 
   document.getElementById('btnPrint').addEventListener('click', async function(){
     var printer = document.getElementById('printer').value;
     if(!printer){ setStatus('Select a printer first.','err'); return; }
     this.disabled = true; setStatus('Sending ONE print job to "'+printer+'"…');
     try {
-      var res = await window.diag.printTest({ deviceName: printer, source: document.getElementById('source').value, mode: document.getElementById('mode').value, markers: document.getElementById('markers').checked });
+      var n = nudgeVals();
+      var res = await window.diag.printTest({ deviceName: printer, source: document.getElementById('source').value, mode: document.getElementById('mode').value, nudgeX: n.nx, nudgeY: n.ny, markers: document.getElementById('markers').checked });
       if(res.ok){ lastTest = res.folder; setStatus('Print job sent.\nDiagnostic: '+res.folder+'\nArtwork measured: '+res.measuredMm+'\nNow inspect the printed sheet and Save Observation below.','ok'); document.getElementById('obsBox').style.display='block'; }
       else { setStatus('PRINT FAILED: '+res.error+'\nDiagnostic saved: '+(res.folder||'(n/a)'),'err'); if(res.folder){ lastTest=res.folder; document.getElementById('obsBox').style.display='block'; } }
     } catch(e){ setStatus('PRINT ERROR: '+e.message,'err'); }
