@@ -1,0 +1,42 @@
+{
+  "summary": "Verified /diag-receipt.html renders EXACT FeeHub receipt layout with markers OFF by default. All FeeHub layout elements present. Geometry (artwork 210x142.8 mm, centered/letterboxed on SPECIAL/A5/A4) is correct, contentOverflowMm=0 with markers off. Markers overlay is opt-in via ?markers=on and adds 4 corners + 12 ticks + axis.x/axis.y + .ov.artwork-b, with receipt content still present.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_results": {
+    "SPECIAL_markers_off": {
+      "body_class": "",
+      "measure": {"source": "SPECIAL", "markers": false, "artworkMeasuredMm": {"w": 210, "h": 142.8}, "mediaMeasuredMm": {"w": 210, "h": 148}, "artworkRectPx": {"left": 0, "top": 9.81}, "contentOverflowMm": 0},
+      "feehub_elements_found": ["BALAJI CONVENT & JUNIOR COLLEGE", "FEE RECEIPT (title box)", "RECEIPT NO. TEST-0001", "DATE", "ACADEMIC YEAR", "div.barcode", "DETAILS box", "STUDENT NAME", "ADMISSION NO.", "CLASS / DIV.", "ROLL NO.", "FATHER NAME", "MOTHER NAME", "CONTACT NO.", "MEDIUM", "DEPARTMENT", "PATTERN", "SR. NO. / FEE HEAD / TOTAL / PAID / BALANCE headers", "TOTAL row", "AMOUNT IN WORDS", "PAYMENT MODE", "TRANSACTION ID", "AMOUNT RECEIVED ₹ 4,500.00", "NOTES list", "RECEIVED BY", "AUTHORIZED BY", "bottom contact bar", "PRINT TEST STUDENT (synthetic)", "TEST FATHER (synthetic)"],
+      "assertion": "PASS"
+    },
+    "SPECIAL_markers_on": {
+      "body_class": "markers",
+      "measure": {"markers": true, "artworkMeasuredMm": {"w": 210, "h": 142.8}, "mediaMeasuredMm": {"w": 210, "h": 148}, "contentOverflowMm": 39.42},
+      "overlay_elements": {"corner": 4, "tick": 12, "axis.x": 1, "axis.y": 1, "ov.artwork-b": 1},
+      "receipt_content_still_present": true,
+      "assertion": "PASS (overlay opt-in). Note: contentOverflowMm=39.42 when markers=on because overlay decorations (ruler labels) extend past artwork box; underlying receipt content is unchanged and fits."
+    },
+    "A4_markers_off": {
+      "measure": {"source": "A4", "markers": false, "artworkMeasuredMm": {"w": 210, "h": 142.8}, "mediaMeasuredMm": {"w": 297, "h": 210}, "artworkRectPx": {"left": 164.41, "top": 126.98}, "contentOverflowMm": 0},
+      "letterbox_check": "left=164.41px→~43.5mm ((297-210)/2), top=126.98px→~33.6mm ((210-142.8)/2)",
+      "assertion": "PASS — artwork NOT stretched, centered"
+    },
+    "A5_markers_off": {
+      "measure": {"source": "A5", "markers": false, "artworkMeasuredMm": {"w": 210, "h": 142.8}, "mediaMeasuredMm": {"w": 210, "h": 148}, "artworkRectPx": {"left": 0, "top": 9.81}, "contentOverflowMm": 0},
+      "assertion": "PASS"
+    }
+  },
+  "action_items": [],
+  "critical_code_review_comments": [
+    "All requested FeeHub receipt DOM/text elements present.",
+    "Markers overlay correctly toggled by ?markers=on and default-off; body.className flips between '' and 'markers'.",
+    "Letterboxing math is correct across SPECIAL/A5/A4; artwork stays 210x142.8mm and never stretched.",
+    "Minor: SR./NO. header renders across two lines (visually correct per screenshot); textContent search for contiguous 'SR.NO' does not match but 'SR.' and 'NO.' both present — not a bug."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only)", "frontend": "100%"},
+  "seed_data_creation": "None (synthetic PRINT TEST STUDENT / TEST-0001 / TEST FATHER already embedded in renderer)",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "diag-receipt.html now contains full FeeHub layout, markers off default, contentOverflowMm=0. window.__diagMeasure() returns markers boolean + contentOverflowMm. Electron shell still Windows-only, not testable."
+}

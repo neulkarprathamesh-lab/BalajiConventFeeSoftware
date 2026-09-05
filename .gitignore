@@ -89,3 +89,4 @@ frontend/node_modules/.cache/default-development/2.pack
 credentials.json
 *.key
 .credentials
+feehub_src/extracted/BalajiConventFeeSoftware/print-diagnostic/node_modules/electron/dist/electron

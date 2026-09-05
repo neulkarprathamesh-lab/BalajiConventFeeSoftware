@@ -1,0 +1,62 @@
+{
+  "summary": "Frontend-only geometry/markers verification of the standalone print-diagnostic renderer (/diag-receipt.html) via window.__diagMeasure() for source=SPECIAL, A5, and A4. All geometry, centering, markers, and info-field assertions pass. Electron main/preload/IPC and silent printing are Windows-only and were not tested per instructions.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_results": {
+    "SPECIAL": {
+      "measure": {
+        "source": "SPECIAL",
+        "requestedArtworkMm": {"w": 210, "h": 142.8},
+        "physicalMediaMm": {"w": 210, "h": 148},
+        "pageToken": "210mm 148mm",
+        "artworkRectPx": {"w": 793.69, "h": 539.7, "left": 0, "top": 9.81},
+        "artworkMeasuredMm": {"w": 210, "h": 142.8},
+        "mediaMeasuredMm": {"w": 210, "h": 148},
+        "devicePixelRatio": 1,
+        "viewport": {"w": 1920, "h": 1080},
+        "cssMmPerPx": 0.2646
+      },
+      "markers": {"corners": 4, "ticks": 12, "h1": "FEEHUB PRINT DIAGNOSTIC", "rows": 4, "hasXplus": true, "hasYplus": true, "has50mm": true, "hasTL": true, "hasTR": true, "hasBL": true, "hasBR": true, "artText": "210.00 × 142.80 mm", "physText": "A5 210 × 148 mm", "srcText": "SPECIAL RECEIPT"},
+      "assertions": "PASS — artwork 210x142.8, media 210x148, left=0, top=9.81px (≈2.6mm = (148-142.8)/2) ✓"
+    },
+    "A5": {
+      "measure": {
+        "source": "A5",
+        "physicalMediaMm": {"w": 210, "h": 148},
+        "artworkRectPx": {"w": 793.69, "h": 539.7, "left": 0, "top": 9.81},
+        "artworkMeasuredMm": {"w": 210, "h": 142.8},
+        "mediaMeasuredMm": {"w": 210, "h": 148}
+      },
+      "markers": {"srcText": "A5", "physText": "A5 210 × 148 mm", "artText": "210.00 × 142.80 mm"},
+      "assertions": "PASS — identical geometry to SPECIAL ✓"
+    },
+    "A4": {
+      "measure": {
+        "source": "A4",
+        "physicalMediaMm": {"w": 297, "h": 210},
+        "pageToken": "297mm 210mm",
+        "artworkRectPx": {"w": 793.69, "h": 539.7, "left": 164.41, "top": 126.98},
+        "artworkMeasuredMm": {"w": 210, "h": 142.8},
+        "mediaMeasuredMm": {"w": 297, "h": 210}
+      },
+      "markers": {"srcText": "A4", "physText": "A4 297 × 210 mm", "artText": "210.00 × 142.80 mm", "corners": 4, "ticks": 12, "rows": 4},
+      "assertions": "PASS — artwork NOT stretched (210x142.8), centered on A4: left=164.41px→43.5mm ((297-210)/2), top=126.98px→33.6mm ((210-142.8)/2) ✓"
+    }
+  },
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Renderer geometry and letterboxing are mathematically correct across SPECIAL/A5/A4.",
+    "12 ruler ticks present (>= required 10). All 4 corner markers (TL/TR/BL/BR) present.",
+    "Info fields (artText/physText/srcText) match spec exactly. Fee table has 4 tbody rows including TOTAL, with PRINT TEST STUDENT footer."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (not tested per request)", "frontend": "100%"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Only /diag-receipt.html is testable in Linux browser. Electron shell (main.js/preload.js/index.html) requires Windows and window.diag IPC; do not attempt in browser. Full window.__diagMeasure() outputs captured for SPECIAL, A5, A4 — all assertions pass."
+}
