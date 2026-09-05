@@ -1,0 +1,250 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>FeeHub Print Diagnostic — Receipt</title>
+<style>
+  :root { --ink:#111; --muted:#555; --line:#111; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; background:#fff; color:var(--ink);
+    font-family: Arial, "Helvetica Neue", sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* PHYSICAL MEDIA (A5 210x148 / A4 297x210, landscape) — set by JS */
+  #media { position: relative; background:#fff; }
+  body.markers #media { outline: 1px dashed #999; }
+  #media .media-label { display:none; position:absolute; top:0.6mm; left:0.6mm; font-size:2.2mm; color:#999; }
+  body.markers #media .media-label { display:block; }
+
+  /* RECEIPT ARTWORK — EXACTLY 210 x 142.8mm, centered in media. This IS the FeeHub receipt. */
+  #artwork { position:absolute; width:210mm; height:142.8mm; overflow:hidden;
+    padding:4.5mm 6mm 4mm 6mm; }
+
+  /* ---------- FeeHub receipt layout (mirrors the app renderer) ---------- */
+  .r-head { display:flex; align-items:flex-start; gap:4mm; }
+  .logo { width:16mm; height:16mm; border-radius:50%; border:0.5mm solid #111; display:flex; align-items:center;
+    justify-content:center; font-weight:800; font-size:6mm; flex:0 0 auto; }
+  .school { flex:1 1 auto; min-width:0; }
+  .school .name { font-size:4.6mm; font-weight:800; letter-spacing:.3px; line-height:1.05; }
+  .school .addr { font-size:2.6mm; color:#333; margin-top:0.6mm; }
+  .school .tag  { font-size:2.4mm; color:#555; font-style:italic; margin-top:0.4mm; }
+  .titlebox { flex:0 0 auto; text-align:center; }
+  .titlebox .t { background:#111; color:#fff; font-weight:800; font-size:4mm; letter-spacing:1px; padding:1.6mm 5mm; }
+  .titlebox .st { font-size:2.3mm; color:#555; font-style:italic; margin-top:0.8mm; }
+  .meta { flex:0 0 auto; text-align:right; font-size:2.6mm; line-height:1.5; min-width:44mm; }
+  .meta .rno { color:#b91c1c; font-weight:800; font-size:3.4mm; }
+  .meta b { color:#111; }
+  .barcode { height:7mm; width:40mm; margin-left:auto; margin-top:1mm;
+    background: repeating-linear-gradient(90deg,#111 0 0.5mm,#fff 0.5mm 1mm,#111 1mm 1.3mm,#fff 1.3mm 2mm); }
+  .barcode-num { font-size:2.2mm; text-align:right; letter-spacing:1px; }
+
+  .ribbon { margin-top:1.5mm; border:0.5mm solid #111; }
+  .ribbon .h { text-align:center; font-weight:800; font-size:3mm; text-transform:uppercase; border-bottom:0.4mm solid #111; padding:0.6mm; }
+  .details { display:grid; grid-template-columns:1fr 1fr; column-gap:8mm; padding:1mm 3mm; }
+  .row { display:flex; height:5mm; align-items:flex-end; }
+  .row .lab { width:26mm; font-size:2.5mm; font-weight:800; text-transform:uppercase; flex:0 0 auto; }
+  .row .col { padding:0 1mm; font-size:2.5mm; }
+  .row .val { flex:1 1 auto; border-bottom:0.3mm solid #999; font-size:2.9mm; padding-bottom:0.3mm; }
+  .row .val.mono { font-family:"Courier New",monospace; }
+
+  .body { display:flex; gap:1mm; margin-top:1.5mm; align-items:stretch; }
+  table.fee { flex:1 1 66%; border-collapse:collapse; border:0.5mm solid #111; }
+  table.fee th, table.fee td { border:0.3mm solid #999; font-size:2.6mm; padding:0.7mm 1.5mm; }
+  table.fee thead th { background:#eee; border-color:#111; font-weight:800; text-align:center; line-height:1.05; }
+  table.fee td.l { text-align:left; } table.fee td.r, table.fee th.r { text-align:right; font-family:"Courier New",monospace; }
+  table.fee tr.total td { font-weight:800; background:#f6f6f6; border-color:#111; }
+  .panel { flex:1 1 34%; border:0.5mm solid #111; display:flex; flex-direction:column; }
+  .panel .seg { border-bottom:0.4mm solid #111; padding:1mm 2mm; }
+  .panel .seg .k { font-size:2.3mm; font-weight:800; text-transform:uppercase; }
+  .panel .seg .v { font-size:2.9mm; font-weight:700; margin-top:0.4mm; }
+  .panel .amt { background:#eee; flex:1 1 auto; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:1mm; }
+  .panel .amt .k { font-size:2.3mm; font-weight:800; text-transform:uppercase; }
+  .panel .amt .v { font-size:5.5mm; font-weight:900; margin-top:0.4mm; }
+
+  .foot { display:flex; gap:4mm; margin-top:1.5mm; }
+  .notes { flex:1 1 auto; font-size:2.3mm; }
+  .notes .h { font-weight:800; text-transform:uppercase; margin-bottom:0.5mm; }
+  .notes ul { margin:0; padding-left:4mm; } .notes li { line-height:1.35; }
+  .sign { flex:0 0 auto; display:flex; gap:8mm; align-items:flex-end; }
+  .sign .s { text-align:center; }
+  .sign .line { width:34mm; border-top:0.4mm solid #111; margin-top:9mm; }
+  .sign .cap { font-size:2.4mm; font-weight:700; text-transform:uppercase; margin-top:0.6mm; }
+  .contact { border-top:0.4mm solid #111; margin-top:1.5mm; padding-top:1mm; text-align:center; font-size:2.4mm; color:#333; }
+
+  /* ---------- optional diagnostic overlay (markers=on) ---------- */
+  .ov { display:none; }
+  body.markers .ov { display:block; position:absolute; }
+  .ov.artwork-b { left:0; top:0; right:0; bottom:0; border:0.4mm solid #e11; pointer-events:none; }
+  .axis { position:absolute; background:#e11; }
+  .axis.x { left:0; top:0; height:0.5mm; width:50mm; }
+  .axis.y { left:0; top:0; width:0.5mm; height:50mm; }
+  .arrow { position:absolute; font-size:2.6mm; font-weight:bold; color:#e11; }
+  .arrow.x { left:51mm; top:-1.2mm; } .arrow.y { left:0.5mm; top:51mm; }
+  .rulcap { position:absolute; font-size:2mm; color:#e11; font-weight:bold; }
+  .tick { position:absolute; background:#e11; }
+  .corner { position:absolute; width:6mm; height:6mm; }
+  .corner b { position:absolute; background:#e11; }
+  .corner .hbar { height:0.5mm; width:6mm; } .corner .vbar { width:0.5mm; height:6mm; }
+  .corner .nm { position:absolute; font-size:2mm; color:#e11; }
+  .c-tl{left:0;top:0}.c-tl .hbar{left:0;top:0}.c-tl .vbar{left:0;top:0}.c-tl .nm{left:7mm;top:0}
+  .c-tr{right:0;top:0}.c-tr .hbar{right:0;top:0}.c-tr .vbar{right:0;top:0}.c-tr .nm{right:7mm;top:0}
+  .c-bl{left:0;bottom:0}.c-bl .hbar{left:0;bottom:0}.c-bl .vbar{left:0;bottom:0}.c-bl .nm{left:7mm;bottom:0}
+  .c-br{right:0;bottom:0}.c-br .hbar{right:0;bottom:0}.c-br .vbar{right:0;bottom:0}.c-br .nm{right:7mm;bottom:0}
+</style>
+</head>
+<body>
+  <div id="media">
+    <div class="media-label" id="mediaLabel">PHYSICAL MEDIA</div>
+    <div id="artwork">
+      <!-- ===== EXACT FeeHub receipt (synthetic PRINT TEST data) ===== -->
+      <div class="r-head">
+        <div class="logo">BC</div>
+        <div class="school">
+          <div class="name">BALAJI CONVENT &amp; JUNIOR COLLEGE</div>
+          <div class="addr">Butibori, Nagpur – 441122, Maharashtra</div>
+          <div class="tag">Shaping Tomorrow, Building Excellence</div>
+        </div>
+        <div class="titlebox">
+          <div class="t">FEE RECEIPT</div>
+          <div class="st">Shaping Tomorrow, Building Excellence</div>
+        </div>
+        <div class="meta">
+          <div class="rno">RECEIPT NO. TEST-0001</div>
+          <div><b>DATE:</b> <span id="dateText">—</span></div>
+          <div><b>ACADEMIC YEAR:</b> 2026-2027</div>
+          <div class="barcode"></div>
+          <div class="barcode-num">BC2026-000123</div>
+        </div>
+      </div>
+
+      <div class="ribbon">
+        <div class="h">Details</div>
+        <div class="details">
+          <div>
+            <div class="row"><div class="lab">Student Name</div><div class="col">:</div><div class="val">PRINT TEST STUDENT</div></div>
+            <div class="row"><div class="lab">Admission No.</div><div class="col">:</div><div class="val mono">TEST-0001</div></div>
+            <div class="row"><div class="lab">Class / Div.</div><div class="col">:</div><div class="val">TEST CLASS / A</div></div>
+            <div class="row"><div class="lab">Roll No.</div><div class="col">:</div><div class="val mono">21</div></div>
+          </div>
+          <div>
+            <div class="row"><div class="lab">Father Name</div><div class="col">:</div><div class="val">TEST FATHER</div></div>
+            <div class="row"><div class="lab">Mother Name</div><div class="col">:</div><div class="val">TEST MOTHER</div></div>
+            <div class="row"><div class="lab">Contact No.</div><div class="col">:</div><div class="val mono">9876543210</div></div>
+            <div class="row"><div class="lab">Medium</div><div class="col">:</div><div class="val">English</div></div>
+            <div class="row"><div class="lab">Department</div><div class="col">:</div><div class="val">Secondary</div></div>
+            <div class="row"><div class="lab">Pattern</div><div class="col">:</div><div class="val">State Pattern</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="body">
+        <table class="fee">
+          <colgroup><col style="width:9%"><col><col style="width:19%"><col style="width:19%"><col style="width:19%"></colgroup>
+          <thead><tr>
+            <th>SR.<br>NO.</th><th style="text-align:left">FEE HEAD</th><th>TOTAL<br>(₹)</th><th>PAID<br>(₹)</th><th>BALANCE<br>(₹)</th>
+          </tr></thead>
+          <tbody>
+            <tr><td style="text-align:center">1</td><td class="l">Tuition Fee</td><td class="r">3,000.00</td><td class="r">3,000.00</td><td class="r">0.00</td></tr>
+            <tr><td style="text-align:center">2</td><td class="l">Practical Fee</td><td class="r">1,000.00</td><td class="r">1,000.00</td><td class="r">0.00</td></tr>
+            <tr><td style="text-align:center">3</td><td class="l">Other Fee</td><td class="r">1,000.00</td><td class="r">500.00</td><td class="r">500.00</td></tr>
+            <tr class="total"><td colspan="2" class="r">TOTAL</td><td class="r">5,000.00</td><td class="r">4,500.00</td><td class="r">500.00</td></tr>
+          </tbody>
+        </table>
+        <div class="panel">
+          <div class="seg"><div class="k">Amount in Words</div><div class="v">Four Thousand Five Hundred Only</div></div>
+          <div class="seg"><div class="k">Payment Mode</div><div class="v">CASH</div></div>
+          <div class="seg"><div class="k">Transaction ID</div><div class="v mono">CASH / 2026</div></div>
+          <div class="amt"><div class="k">Amount Received</div><div class="v">₹ 4,500.00</div></div>
+        </div>
+      </div>
+
+      <div class="foot">
+        <div class="notes">
+          <div class="h">Notes</div>
+          <ul>
+            <li>This is a computer-generated receipt.</li>
+            <li>Fees once paid are non-refundable.</li>
+            <li>Please retain this receipt for future reference.</li>
+          </ul>
+        </div>
+        <div class="sign">
+          <div class="s"><div class="line"></div><div class="cap">Received By</div></div>
+          <div class="s"><div class="line"></div><div class="cap">Authorized By</div></div>
+        </div>
+      </div>
+
+      <div class="contact">Butibori, Nagpur – 441122 &nbsp;•&nbsp; 0712-1234567 &nbsp;•&nbsp; info@balajiconventbutibori.edu.in &nbsp;•&nbsp; www.balajiconventbutibori.edu.in</div>
+
+      <!-- ===== optional diagnostic overlay ===== -->
+      <div class="ov artwork-b"></div>
+      <div class="ov"><div class="axis x"></div></div>
+      <div class="ov"><div class="axis y"></div></div>
+      <div class="ov"><div class="arrow x">X+ →</div></div>
+      <div class="ov"><div class="arrow y">Y+ ↓</div></div>
+      <div class="ov" id="rulerH"></div>
+      <div class="ov" id="rulerV"></div>
+      <div class="ov"><div class="corner c-tl"><b class="hbar"></b><b class="vbar"></b><span class="nm">TL</span></div></div>
+      <div class="ov"><div class="corner c-tr"><b class="hbar"></b><b class="vbar"></b><span class="nm">TR</span></div></div>
+      <div class="ov"><div class="corner c-bl"><b class="hbar"></b><b class="vbar"></b><span class="nm">BL</span></div></div>
+      <div class="ov"><div class="corner c-br"><b class="hbar"></b><b class="vbar"></b><span class="nm">BR</span></div></div>
+    </div>
+  </div>
+
+<script>
+  var SOURCES = {
+    SPECIAL: { phys:'A5 210 × 148 mm', wmm:210, hmm:148 },
+    A5:      { phys:'A5 210 × 148 mm', wmm:210, hmm:148 },
+    A4:      { phys:'A4 297 × 210 mm', wmm:297, hmm:210 }
+  };
+  function qp(k){ return new URLSearchParams(location.search).get(k); }
+  var source = (qp('source') || 'SPECIAL').toUpperCase(); if(!SOURCES[source]) source='SPECIAL';
+  var m = SOURCES[source];
+  var markers = (qp('markers') || 'off').toLowerCase() === 'on';
+  if (markers) document.body.classList.add('markers');
+
+  var media = document.getElementById('media');
+  media.style.width  = m.wmm + 'mm'; media.style.height = m.hmm + 'mm';
+  var art = document.getElementById('artwork');
+  art.style.left = ((m.wmm - 210) / 2) + 'mm';
+  art.style.top  = ((m.hmm - 142.8) / 2) + 'mm';
+  document.getElementById('mediaLabel').textContent = 'PHYSICAL MEDIA — ' + m.phys + ' (LANDSCAPE)';
+  document.getElementById('dateText').textContent = new Date().toLocaleDateString('en-GB');
+
+  // 50mm rulers (only visible when markers=on)
+  function buildRuler(el, horizontal){
+    if(!el) return;
+    for(var i=0;i<=50;i+=10){
+      var t=document.createElement('div'); t.className='tick';
+      if(horizontal){ t.style.left=i+'mm'; t.style.top='6mm'; t.style.width='0.3mm'; t.style.height='2.5mm'; }
+      else { t.style.top=i+'mm'; t.style.left='6mm'; t.style.height='0.3mm'; t.style.width='2.5mm'; }
+      el.appendChild(t);
+    }
+    var cap=document.createElement('div'); cap.className='rulcap'; cap.textContent='50mm';
+    if(horizontal){ cap.style.left='50mm'; cap.style.top='3mm'; } else { cap.style.left='3mm'; cap.style.top='50mm'; }
+    el.appendChild(cap);
+  }
+  buildRuler(document.getElementById('rulerH'), true);
+  buildRuler(document.getElementById('rulerV'), false);
+
+  // @page matches the requested media so the print pipeline has no ambiguity.
+  var pageToken = m.wmm + 'mm ' + m.hmm + 'mm';
+  var st = document.createElement('style');
+  st.textContent='@page{size:'+pageToken+';margin:0;} @media print{html,body{width:'+m.wmm+'mm;height:'+m.hmm+'mm;}}';
+  document.head.appendChild(st);
+
+  window.__diagMeasure = function(){
+    var MM = 96/25.4;
+    var ar = art.getBoundingClientRect(), mr = media.getBoundingClientRect();
+    return {
+      source: source, markers: markers,
+      requestedArtworkMm:{w:210,h:142.8}, physicalMediaMm:{w:m.wmm,h:m.hmm}, pageToken: pageToken,
+      artworkRectPx:{w:+ar.width.toFixed(2),h:+ar.height.toFixed(2),left:+ar.left.toFixed(2),top:+ar.top.toFixed(2)},
+      artworkMeasuredMm:{w:+(ar.width/MM).toFixed(2),h:+(ar.height/MM).toFixed(2)},
+      mediaMeasuredMm:{w:+(mr.width/MM).toFixed(2),h:+(mr.height/MM).toFixed(2)},
+      contentOverflowMm:+((art.scrollHeight-art.clientHeight)/MM).toFixed(2),
+      devicePixelRatio: window.devicePixelRatio, viewport:{w:window.innerWidth,h:window.innerHeight}
+    };
+  };
+  window.__diagReady = true;
+</script>
+</body>
+</html>

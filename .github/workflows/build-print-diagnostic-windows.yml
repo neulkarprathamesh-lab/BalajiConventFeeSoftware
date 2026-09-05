@@ -1,0 +1,56 @@
+name: Build Print Diagnostic (Windows)
+
+# Builds the STANDALONE FeeHub Print Diagnostic Electron tool on a real
+# Windows runner and uploads the NSIS installer + portable .exe as artifacts.
+# This does NOT touch the main FeeHub app. Synthetic data only, no server/DB.
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'print-diagnostic/**'
+      - '.github/workflows/build-print-diagnostic-windows.yml'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: print-diagnostic
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Show tool versions
+        run: |
+          node --version
+          yarn --version
+
+      - name: Install dependencies (Yarn classic, frozen lockfile)
+        run: yarn install --frozen-lockfile
+
+      - name: Build Windows installer + portable (electron-builder)
+        run: yarn dist
+        env:
+          # Avoid attempting code-signing on CI; unsigned test builds only.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: List build output
+        if: always()
+        run: dir dist
+
+      - name: Upload Windows executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: FeeHub-Print-Diagnostic-Windows
+          if-no-files-found: error
+          path: |
+            print-diagnostic/dist/*.exe
+            print-diagnostic/dist/*.blockmap
+            print-diagnostic/dist/latest.yml

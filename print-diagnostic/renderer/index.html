@@ -1,0 +1,189 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>FeeHub Print Diagnostic</title>
+<style>
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Segoe UI, Arial, sans-serif; background:#0f172a; color:#e2e8f0; }
+  .wrap { display:grid; grid-template-columns:360px 1fr; height:100vh; }
+  .panel { padding:18px 20px; overflow:auto; border-right:1px solid #1e293b; background:#0b1220; }
+  h2 { margin:0 0 4px; font-size:18px; letter-spacing:.5px; }
+  .sub { color:#64748b; font-size:12px; margin-bottom:16px; }
+  label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:#94a3b8; margin:14px 0 4px; }
+  select, input, textarea { width:100%; background:#111827; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:8px 10px; font-size:13px; }
+  .fixed { background:#111827; border:1px dashed #334155; border-radius:6px; padding:8px 10px; font-size:13px; color:#cbd5e1; }
+  .btn { width:100%; border:0; border-radius:8px; padding:11px; font-size:14px; font-weight:600; cursor:pointer; margin-top:12px; }
+  .btn.primary { background:#2563eb; color:#fff; }
+  .btn.green { background:#16a34a; color:#fff; }
+  .btn.slate { background:#334155; color:#e2e8f0; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .status { margin-top:16px; padding:10px 12px; border-radius:6px; background:#111827; border:1px solid #334155; font-size:12px; white-space:pre-wrap; min-height:44px; }
+  .status.ok { border-color:#16a34a; } .status.err { border-color:#dc2626; color:#fecaca; }
+  .preview { padding:18px; overflow:auto; background:#1e293b; }
+  .preview .frame { background:#fff; box-shadow:0 10px 40px rgba(0,0,0,.5); }
+  iframe { border:0; display:block; }
+  fieldset { border:1px solid #334155; border-radius:8px; margin-top:14px; padding:10px 12px; }
+  legend { font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:#94a3b8; padding:0 6px; }
+  .row { display:flex; gap:10px; }
+  .opt { font-size:12px; color:#cbd5e1; display:flex; align-items:center; gap:5px; margin:3px 0; }
+  .opt input { width:auto; }
+  .mini { font-size:11px; color:#64748b; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel">
+    <h2>FEEHUB PRINT DIAGNOSTIC</h2>
+    <div class="sub">Standalone Windows print test — no FeeHub server/DB. Synthetic data only.</div>
+
+    <label>Printer (any Windows printer)</label>
+    <select id="printer" data-testid="diag-printer"></select>
+
+    <label>Paper Source</label>
+    <select id="source" data-testid="diag-source">
+      <option value="SPECIAL">SPECIAL RECEIPT (210 × 142.8 on A5)</option>
+      <option value="A5">A5 (210 × 148 mm)</option>
+      <option value="A4">A4 (210 × 297 mm)</option>
+    </select>
+
+    <label>Orientation</label>
+    <div class="fixed">LANDSCAPE</div>
+    <label>Artwork</label>
+    <div class="fixed">210 × 142.8 mm (fixed, letterboxed)</div>
+    <label>Physical Media</label>
+    <div class="fixed" id="physFixed">A5 210 × 148 mm</div>
+
+    <label class="opt" style="margin-top:12px"><input type="checkbox" id="markers" data-testid="diag-markers"> Show measurement markers (overlay) — OFF prints the exact FeeHub receipt</label>
+
+    <button class="btn primary" id="btnPreview" data-testid="diag-show-preview">SHOW PREVIEW</button>
+    <button class="btn green" id="btnPrint" data-testid="diag-print">PRINT TEST RECEIPT</button>
+    <button class="btn slate" id="btnLog" data-testid="diag-open-log">OPEN DIAGNOSTIC LOG</button>
+
+    <div class="status" id="status" data-testid="diag-status">Status: Ready</div>
+
+    <fieldset id="obsBox" style="display:none">
+      <legend>Physical Print Observation</legend>
+      <div class="mini">Fill in after looking at the printed sheet, then Save.</div>
+      <div class="opt-group" data-name="orientation">
+        <div class="mini" style="margin-top:6px">Orientation</div>
+        <label class="opt"><input type="radio" name="orientation" value="correct">Correct</label>
+        <label class="opt"><input type="radio" name="orientation" value="rot90">Rotated 90°</label>
+        <label class="opt"><input type="radio" name="orientation" value="rot180">Rotated 180°</label>
+        <label class="opt"><input type="radio" name="orientation" value="rotother">Rotated other</label>
+      </div>
+      <div class="opt-group" data-name="position">
+        <div class="mini" style="margin-top:6px">Position</div>
+        <label class="opt"><input type="radio" name="position" value="centered">Centered</label>
+        <label class="opt"><input type="radio" name="position" value="left">Too far left</label>
+        <label class="opt"><input type="radio" name="position" value="right">Too far right</label>
+        <label class="opt"><input type="radio" name="position" value="high">Too high</label>
+        <label class="opt"><input type="radio" name="position" value="low">Too low</label>
+      </div>
+      <div class="opt-group" data-name="scaling">
+        <div class="mini" style="margin-top:6px">Scaling</div>
+        <label class="opt"><input type="radio" name="scaling" value="correct">Correct</label>
+        <label class="opt"><input type="radio" name="scaling" value="large">Too large</label>
+        <label class="opt"><input type="radio" name="scaling" value="small">Too small</label>
+      </div>
+      <div class="opt-group" data-name="clipping">
+        <div class="mini" style="margin-top:6px">Clipping</div>
+        <label class="opt"><input type="checkbox" name="clipping" value="none">None</label>
+        <label class="opt"><input type="checkbox" name="clipping" value="top">Top</label>
+        <label class="opt"><input type="checkbox" name="clipping" value="bottom">Bottom</label>
+        <label class="opt"><input type="checkbox" name="clipping" value="left">Left</label>
+        <label class="opt"><input type="checkbox" name="clipping" value="right">Right</label>
+      </div>
+      <div class="opt-group" data-name="page">
+        <div class="mini" style="margin-top:6px">Page</div>
+        <label class="opt"><input type="radio" name="page" value="a5">A5</label>
+        <label class="opt"><input type="radio" name="page" value="other">Other</label>
+      </div>
+      <div class="row">
+        <div style="flex:1"><label>Measured W (mm)</label><input id="measW" data-testid="diag-measw" type="number" step="0.1"></div>
+        <div style="flex:1"><label>Measured H (mm)</label><input id="measH" data-testid="diag-mesh" type="number" step="0.1"></div>
+      </div>
+      <label>Notes</label>
+      <textarea id="notes" data-testid="diag-notes" rows="2"></textarea>
+      <button class="btn slate" id="btnObs" data-testid="diag-save-observation">SAVE OBSERVATION</button>
+    </fieldset>
+  </div>
+
+  <div class="preview">
+    <div class="mini" style="margin-bottom:8px">Preview uses the SAME renderer (receipt.html) that is sent to the printer.</div>
+    <div class="frame" id="frameWrap" style="display:inline-block">
+      <iframe id="pv" data-testid="diag-preview-iframe" width="794" height="559"></iframe>
+    </div>
+  </div>
+</div>
+
+<script>
+  var lastTest = null;
+  var setStatus = function(msg, kind){ var s=document.getElementById('status'); s.textContent='Status: '+msg; s.className='status'+(kind?(' '+kind):''); };
+  var PHYS = { SPECIAL:'A5 210 × 148 mm', A5:'A5 210 × 148 mm', A4:'A4 297 × 210 mm' };
+
+  async function loadPrinters(){
+    try {
+      var list = await window.diag.listPrinters();
+      var sel = document.getElementById('printer'); sel.innerHTML='';
+      if(!list || !list.length){ var o=document.createElement('option'); o.textContent='(no printers found)'; o.value=''; sel.appendChild(o); return; }
+      list.forEach(function(p){ var o=document.createElement('option'); o.value=p.name; o.textContent=p.name+(p.isDefault?' (default)':''); sel.appendChild(o); });
+    } catch(e){ setStatus('Could not list printers: '+e.message,'err'); }
+  }
+
+  function showPreview(){
+    var src = document.getElementById('source').value;
+    document.getElementById('physFixed').textContent = PHYS[src];
+    var url = 'receipt.html?source='+encodeURIComponent(src)+'&printer='+encodeURIComponent(document.getElementById('printer').value||'—')+'&markers='+(document.getElementById('markers').checked?'on':'off')+'&ts='+encodeURIComponent(new Date().toISOString());
+    // Scale the iframe to the media aspect ratio (screen preview only; physical ratio stays exact).
+    var w = (src==='A4') ? 297 : 210, h = (src==='A4') ? 210 : 148;
+    var pxPerMm = 3.7795, scale = 0.72;
+    var iw = Math.round(w*pxPerMm*scale), ih = Math.round(h*pxPerMm*scale);
+    var pv = document.getElementById('pv');
+    pv.style.width='100%'; pv.style.height='100%';
+    document.getElementById('frameWrap').style.width = iw+'px';
+    document.getElementById('frameWrap').style.height = ih+'px';
+    pv.style.transformOrigin='0 0';
+    pv.width = Math.round(w*pxPerMm); pv.height = Math.round(h*pxPerMm);
+    pv.style.transform = 'scale('+scale+')';
+    pv.src = url;
+    setStatus('Preview loaded ('+src+').');
+  }
+
+  document.getElementById('btnPreview').addEventListener('click', showPreview);
+  document.getElementById('source').addEventListener('change', function(){ document.getElementById('physFixed').textContent = PHYS[this.value]; });
+
+  document.getElementById('btnPrint').addEventListener('click', async function(){
+    var printer = document.getElementById('printer').value;
+    if(!printer){ setStatus('Select a printer first.','err'); return; }
+    this.disabled = true; setStatus('Sending ONE print job to "'+printer+'"…');
+    try {
+      var res = await window.diag.printTest({ deviceName: printer, source: document.getElementById('source').value, markers: document.getElementById('markers').checked });
+      if(res.ok){ lastTest = res.folder; setStatus('Print job sent.\nDiagnostic: '+res.folder+'\nArtwork measured: '+res.measuredMm+'\nNow inspect the printed sheet and Save Observation below.','ok'); document.getElementById('obsBox').style.display='block'; }
+      else { setStatus('PRINT FAILED: '+res.error+'\nDiagnostic saved: '+(res.folder||'(n/a)'),'err'); if(res.folder){ lastTest=res.folder; document.getElementById('obsBox').style.display='block'; } }
+    } catch(e){ setStatus('PRINT ERROR: '+e.message,'err'); }
+    this.disabled = false;
+  });
+
+  document.getElementById('btnLog').addEventListener('click', async function(){
+    try { var p = await window.diag.openLog(lastTest); if(!p) setStatus('No diagnostic folder yet — run a print test first.'); }
+    catch(e){ setStatus('Could not open log: '+e.message,'err'); }
+  });
+
+  document.getElementById('btnObs').addEventListener('click', async function(){
+    if(!lastTest){ setStatus('Run a print test before saving an observation.','err'); return; }
+    function radio(n){ var el=document.querySelector('input[name="'+n+'"]:checked'); return el?el.value:null; }
+    function checks(n){ return Array.prototype.slice.call(document.querySelectorAll('input[name="'+n+'"]:checked')).map(function(e){return e.value;}); }
+    var obs = { orientation:radio('orientation'), position:radio('position'), scaling:radio('scaling'),
+      clipping:checks('clipping'), page:radio('page'),
+      measuredWidthMm: parseFloat(document.getElementById('measW').value)||null,
+      measuredHeightMm: parseFloat(document.getElementById('measH').value)||null,
+      notes: document.getElementById('notes').value||'', savedAt: new Date().toISOString() };
+    try { var r = await window.diag.saveObservation({ folder:lastTest, observation:obs }); setStatus(r.ok?('Observation appended to diagnostic report.\n'+r.folder):('Save failed: '+r.error), r.ok?'ok':'err'); }
+    catch(e){ setStatus('Save error: '+e.message,'err'); }
+  });
+
+  loadPrinters().then(showPreview);
+</script>
+</body>
+</html>

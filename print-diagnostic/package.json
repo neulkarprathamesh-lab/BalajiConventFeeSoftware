@@ -1,0 +1,41 @@
+{
+  "name": "feehub-print-diagnostic",
+  "productName": "FeeHub Print Diagnostic",
+  "version": "1.0.0",
+  "description": "Standalone Windows print-diagnostic tool for the FeeHub 210x142.8mm landscape receipt. No FeeHub server/DB. Synthetic data only.",
+  "author": { "name": "Balaji Convent & Junior College" },
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis portable --x64"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "31.7.7",
+    "electron-builder": "24.13.3"
+  },
+  "build": {
+    "appId": "in.balajiconvent.feehub.printdiagnostic",
+    "productName": "FeeHub Print Diagnostic",
+    "directories": { "output": "dist" },
+    "files": [ "main.js", "preload.js", "renderer/**", "package.json" ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "artifactName": "FeeHub-Print-Diagnostic-Test-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "FeeHub Print Diagnostic"
+    },
+    "portable": {
+      "artifactName": "FeeHub-Print-Diagnostic-Test-Portable-${version}.${ext}"
+    }
+  }
+}
