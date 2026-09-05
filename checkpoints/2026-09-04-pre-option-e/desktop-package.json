@@ -1,0 +1,13 @@
+{
+  "name": "balaji-feehub-desktop",
+  "version": "1.0.0",
+  "description": "Balaji FeeHub - native desktop application (Electron shell around the LAN-hosted app)",
+  "author": {
+    "name": "Balaji Convent & Junior College",
+    "email": "admin@balajiconvent.in"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "main.js",
+  "dependencies": {}
+}

@@ -1,0 +1,40 @@
+# Dependencies and build output
+node_modules/
+build/
+build-preview/
+dist/
+release/
+__pycache__/
+*.pyc
+
+# Packaged/binary artifacts (source lives in checkpoints/*.js instead)
+*.asar*
+*.bak
+*.bak-*
+
+# Databases (none currently tracked in-tree, excluded defensively)
+*.db
+*.sqlite
+*.sqlite3
+
+# Secrets — real .env files never committed; .env.template files ARE tracked
+.env
+.env.*
+!.env.template
+!*/.env.template
+
+# Logs, temp, generated test captures
+*.log
+temp/
+tmp/
+cache/
+coverage/
+frontend/preview-captures/
+
+# Machine/tool-local config, not part of the application
+frontend/.claude/
+
+# Contains real personal credentials (developer email + password) hardcoded
+# across the whole directory — excluded from this snapshot for that reason,
+# not because tests are unwanted. See commit message / report for detail.
+backend/tests/
