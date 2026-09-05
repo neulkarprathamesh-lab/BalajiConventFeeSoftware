@@ -47,6 +47,14 @@
       <option value="A4">A4 (210 × 297 mm)</option>
     </select>
 
+    <label>Print Mode (try these to find what your printer honours)</label>
+    <select id="mode" data-testid="diag-mode">
+      <option value="landscape-media">Landscape page · no rotate flag (best for HORIZONTAL loading)</option>
+      <option value="rotate-cw">Portrait sheet · artwork rotated 90° CW</option>
+      <option value="rotate-ccw">Portrait sheet · artwork rotated 90° CCW</option>
+      <option value="landscape-flag">Legacy: named size + landscape flag (original)</option>
+    </select>
+
     <label>Orientation</label>
     <div class="fixed">LANDSCAPE</div>
     <label>Artwork</label>
@@ -131,12 +139,21 @@
     } catch(e){ setStatus('Could not list printers: '+e.message,'err'); }
   }
 
+  function modeGeom(src, mode){
+    var LW = (src==='A4')?297:210, LH = (src==='A4')?210:148;
+    if(mode==='rotate-cw')  return { pw:LH, ph:LW, rot:90 };
+    if(mode==='rotate-ccw') return { pw:LH, ph:LW, rot:270 };
+    return { pw:LW, ph:LH, rot:0 }; // landscape-media & landscape-flag both render an upright landscape page
+  }
+
   function showPreview(){
     var src = document.getElementById('source').value;
+    var mode = document.getElementById('mode').value;
     document.getElementById('physFixed').textContent = PHYS[src];
-    var url = 'receipt.html?source='+encodeURIComponent(src)+'&printer='+encodeURIComponent(document.getElementById('printer').value||'—')+'&markers='+(document.getElementById('markers').checked?'on':'off')+'&ts='+encodeURIComponent(new Date().toISOString());
-    // Scale the iframe to the media aspect ratio (screen preview only; physical ratio stays exact).
-    var w = (src==='A4') ? 297 : 210, h = (src==='A4') ? 210 : 148;
+    var g = modeGeom(src, mode);
+    var url = 'receipt.html?source='+encodeURIComponent(src)+'&printer='+encodeURIComponent(document.getElementById('printer').value||'—')+'&markers='+(document.getElementById('markers').checked?'on':'off')+'&pagew='+g.pw+'&pageh='+g.ph+'&rot='+g.rot+'&ts='+encodeURIComponent(new Date().toISOString());
+    // Scale the iframe to the page aspect ratio (screen preview only; physical ratio stays exact).
+    var w = g.pw, h = g.ph;
     var pxPerMm = 3.7795, scale = 0.72;
     var iw = Math.round(w*pxPerMm*scale), ih = Math.round(h*pxPerMm*scale);
     var pv = document.getElementById('pv');
@@ -147,18 +164,19 @@
     pv.width = Math.round(w*pxPerMm); pv.height = Math.round(h*pxPerMm);
     pv.style.transform = 'scale('+scale+')';
     pv.src = url;
-    setStatus('Preview loaded ('+src+').');
+    setStatus('Preview loaded ('+src+' · '+mode+').');
   }
 
   document.getElementById('btnPreview').addEventListener('click', showPreview);
   document.getElementById('source').addEventListener('change', function(){ document.getElementById('physFixed').textContent = PHYS[this.value]; });
+  document.getElementById('mode').addEventListener('change', showPreview);
 
   document.getElementById('btnPrint').addEventListener('click', async function(){
     var printer = document.getElementById('printer').value;
     if(!printer){ setStatus('Select a printer first.','err'); return; }
     this.disabled = true; setStatus('Sending ONE print job to "'+printer+'"…');
     try {
-      var res = await window.diag.printTest({ deviceName: printer, source: document.getElementById('source').value, markers: document.getElementById('markers').checked });
+      var res = await window.diag.printTest({ deviceName: printer, source: document.getElementById('source').value, mode: document.getElementById('mode').value, markers: document.getElementById('markers').checked });
       if(res.ok){ lastTest = res.folder; setStatus('Print job sent.\nDiagnostic: '+res.folder+'\nArtwork measured: '+res.measuredMm+'\nNow inspect the printed sheet and Save Observation below.','ok'); document.getElementById('obsBox').style.display='block'; }
       else { setStatus('PRINT FAILED: '+res.error+'\nDiagnostic saved: '+(res.folder||'(n/a)'),'err'); if(res.folder){ lastTest=res.folder; document.getElementById('obsBox').style.display='block'; } }
     } catch(e){ setStatus('PRINT ERROR: '+e.message,'err'); }

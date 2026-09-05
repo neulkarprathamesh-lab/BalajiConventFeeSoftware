@@ -202,11 +202,21 @@
   if (markers) document.body.classList.add('markers');
 
   var media = document.getElementById('media');
-  media.style.width  = m.wmm + 'mm'; media.style.height = m.hmm + 'mm';
+  var pageW = parseFloat(qp('pagew')) || m.wmm;
+  var pageH = parseFloat(qp('pageh')) || m.hmm;
+  var rot = parseInt(qp('rot') || '0', 10); if (rot !== 0 && rot !== 90 && rot !== 270) rot = 0;
+  media.style.width  = pageW + 'mm'; media.style.height = pageH + 'mm';
   var art = document.getElementById('artwork');
-  art.style.left = ((m.wmm - 210) / 2) + 'mm';
-  art.style.top  = ((m.hmm - 142.8) / 2) + 'mm';
-  document.getElementById('mediaLabel').textContent = 'PHYSICAL MEDIA — ' + m.phys + ' (LANDSCAPE)';
+  if (rot === 0) {
+    art.style.left = ((pageW - 210) / 2) + 'mm';
+    art.style.top  = ((pageH - 142.8) / 2) + 'mm';
+  } else {
+    // Pre-rotate the 210×142.8 artwork about its centre; centred on the portrait sheet.
+    art.style.left = '50%'; art.style.top = '50%';
+    art.style.transformOrigin = 'center center';
+    art.style.transform = 'translate(-50%,-50%) rotate(' + rot + 'deg)';
+  }
+  document.getElementById('mediaLabel').textContent = 'MEDIA ' + m.phys + ' | page ' + pageW + '×' + pageH + 'mm · rot ' + rot + '°';
   document.getElementById('dateText').textContent = new Date().toLocaleDateString('en-GB');
 
   // 50mm rulers (only visible when markers=on)
@@ -225,22 +235,21 @@
   buildRuler(document.getElementById('rulerH'), true);
   buildRuler(document.getElementById('rulerV'), false);
 
-  // @page matches the requested media so the print pipeline has no ambiguity.
-  var pageToken = m.wmm + 'mm ' + m.hmm + 'mm';
+  // @page matches the requested page geometry so the print pipeline has no ambiguity.
+  var pageToken = pageW + 'mm ' + pageH + 'mm';
   var st = document.createElement('style');
-  st.textContent='@page{size:'+pageToken+';margin:0;} @media print{html,body{width:'+m.wmm+'mm;height:'+m.hmm+'mm;}}';
+  st.textContent='@page{size:'+pageToken+';margin:0;} @media print{html,body{width:'+pageW+'mm;height:'+pageH+'mm;}}';
   document.head.appendChild(st);
 
   window.__diagMeasure = function(){
     var MM = 96/25.4;
     var ar = art.getBoundingClientRect(), mr = media.getBoundingClientRect();
     return {
-      source: source, markers: markers,
+      source: source, markers: markers, rot: rot, pageMm:{w:pageW,h:pageH},
       requestedArtworkMm:{w:210,h:142.8}, physicalMediaMm:{w:m.wmm,h:m.hmm}, pageToken: pageToken,
       artworkRectPx:{w:+ar.width.toFixed(2),h:+ar.height.toFixed(2),left:+ar.left.toFixed(2),top:+ar.top.toFixed(2)},
-      artworkMeasuredMm:{w:+(ar.width/MM).toFixed(2),h:+(ar.height/MM).toFixed(2)},
+      artworkBoundingMm:{w:+(ar.width/MM).toFixed(2),h:+(ar.height/MM).toFixed(2)},
       mediaMeasuredMm:{w:+(mr.width/MM).toFixed(2),h:+(mr.height/MM).toFixed(2)},
-      contentOverflowMm:+((art.scrollHeight-art.clientHeight)/MM).toFixed(2),
       devicePixelRatio: window.devicePixelRatio, viewport:{w:window.innerWidth,h:window.innerHeight}
     };
   };

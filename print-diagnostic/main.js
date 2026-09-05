@@ -67,22 +67,41 @@ ipcMain.handle('print-test', async (event, opts = {}) => {
   const folder = path.join(diagRoot(), `PrintTest_${ts}`);
   fs.mkdirSync(folder, { recursive: true });
 
+  // ---- Print mode: how we ask Windows/the driver for orientation & media ----
+  // HP host-based GDI drivers (M1005 / P1007) honour these very differently,
+  // so the tool can try several and record which one prints correctly.
+  const LW = m.wmm, LH = m.hmm; // landscape media dims (A5: 210x148, A4: 297x210)
+  const mode = (opts.mode || 'landscape-media');
+  let pagew, pageh, rot, landscape, pageSize;
+  if (mode === 'landscape-flag') {           // legacy: named size + landscape flag (the original, wrong on M1005)
+    pagew = LW; pageh = LH; rot = 0; landscape = true; pageSize = m.pageSizeName;
+  } else if (mode === 'rotate-cw') {          // portrait sheet, artwork pre-rotated 90° CW, no landscape flag
+    pagew = LH; pageh = LW; rot = 90; landscape = false;
+    pageSize = { width: Math.round(LH * 1000), height: Math.round(LW * 1000) };
+  } else if (mode === 'rotate-ccw') {         // portrait sheet, artwork pre-rotated 90° CCW, no landscape flag
+    pagew = LH; pageh = LW; rot = 270; landscape = false;
+    pageSize = { width: Math.round(LH * 1000), height: Math.round(LW * 1000) };
+  } else {                                    // 'landscape-media' (default): explicit landscape page, NO landscape flag
+    pagew = LW; pageh = LH; rot = 0; landscape = false;
+    pageSize = { width: Math.round(LW * 1000), height: Math.round(LH * 1000) };
+  }
+
   const diag = {
     testId: ts,
     timestampIso: new Date().toISOString(),
-    expected: { artworkMm: { w: 210, h: 142.8 }, physicalMediaMm: { w: m.wmm, h: m.hmm }, orientation: 'landscape', source },
+    expected: { artworkMm: { w: 210, h: 142.8 }, physicalMediaMm: { w: m.wmm, h: m.hmm }, orientation: 'landscape', source, mode },
     request: null, environment: environment(), printer: null, renderer: null,
     electron: {}, windows: {}, result: { status: 'PENDING', error: null },
   };
 
   // Hidden window that loads the SAME receipt renderer used for preview.
   const printWin = new BrowserWindow({
-    show: false, width: Math.round(m.wmm * 3.7795), height: Math.round(m.hmm * 3.7795),
+    show: false, width: Math.round(pagew * 3.7795), height: Math.round(pageh * 3.7795),
     webPreferences: { contextIsolation: true, nodeIntegration: false, offscreen: false },
   });
   const url = 'file://' + path.join(__dirname, 'renderer', 'receipt.html') +
     `?source=${encodeURIComponent(source)}&printer=${encodeURIComponent(deviceName || '-')}&ts=${encodeURIComponent(diag.timestampIso)}` +
-    `&markers=${opts.markers ? 'on' : 'off'}`;
+    `&markers=${opts.markers ? 'on' : 'off'}&pagew=${pagew}&pageh=${pageh}&rot=${rot}`;
 
   try {
     await printWin.loadURL(url);
@@ -111,14 +130,15 @@ ipcMain.handle('print-test', async (event, opts = {}) => {
 
     // Print parameters — the exact desktop pipeline (never window.print()).
     const printOptions = {
-      silent: true, printBackground: true, landscape: true, deviceName,
-      margins: { marginType: 'none' }, pageSize: m.pageSizeName, copies: 1,
+      silent: true, printBackground: true, landscape: landscape, deviceName,
+      margins: { marginType: 'none' }, pageSize: pageSize, copies: 1,
     };
     diag.request = {
-      selectedPrinter: deviceName, applicationPaperSource: source,
+      selectedPrinter: deviceName, applicationPaperSource: source, printMode: mode,
       artworkWidthMm: 210, artworkHeightMm: 142.8, physicalMediaWidthMm: m.wmm, physicalMediaHeightMm: m.hmm,
-      orientation: 'landscape', margins: 'none', scale: '100% (no fit-to-page)',
-      pageSize: m.pageSizeName, silent: true, deviceName, ipcParams: printOptions,
+      pageWidthMm: pagew, pageHeightMm: pageh, contentRotationDeg: rot, orientationFlag: landscape,
+      margins: 'none', scale: '100% (no fit-to-page)',
+      pageSize: pageSize, silent: true, deviceName, ipcParams: printOptions,
     };
     diag.electron.printOptions = printOptions;
 
@@ -141,8 +161,8 @@ ipcMain.handle('print-test', async (event, opts = {}) => {
   return {
     ok: diag.result.status === 'SUCCESS', folder,
     error: diag.result.error,
-    measuredMm: diag.renderer && diag.renderer.artworkMeasuredMm
-      ? `${diag.renderer.artworkMeasuredMm.w} x ${diag.renderer.artworkMeasuredMm.h} mm` : 'n/a',
+    measuredMm: diag.renderer && diag.renderer.artworkBoundingMm
+      ? `${diag.renderer.artworkBoundingMm.w} x ${diag.renderer.artworkBoundingMm.h} mm (page ${diag.renderer.pageMm ? diag.renderer.pageMm.w + '×' + diag.renderer.pageMm.h : '?'}, rot ${diag.renderer.rot})` : 'n/a',
   };
 });
 
