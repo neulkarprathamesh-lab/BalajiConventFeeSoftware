@@ -90,3 +90,4 @@ credentials.json
 *.key
 .credentials
 feehub_src/extracted/BalajiConventFeeSoftware/print-diagnostic/node_modules/electron/dist/electron
+frontend/node_modules/.cache/default-development/0.pack
