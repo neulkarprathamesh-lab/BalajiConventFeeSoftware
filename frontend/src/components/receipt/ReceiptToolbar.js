@@ -18,6 +18,7 @@ export default function ReceiptToolbar({
   onPrint, twoUp = false, onTwoUp,
   extraActions = null, publicMode = false,
   onPrintPreview = null,
+  printOnly = false,
 }) {
   const [busy, setBusy] = useState(null);
   const [showMore, setShowMore] = useState(false);
@@ -45,6 +46,12 @@ export default function ReceiptToolbar({
   return (
     <div className="flex items-center gap-2 flex-wrap no-print" data-testid="receipt-toolbar">
       {extraActions}
+      {printOnly ? (
+        <button onClick={runPrint} className={primary} data-testid="rv-print">
+          <Printer className="w-4 h-4" /> Print
+        </button>
+      ) : (
+      <>
       {onTwoUp && (
         <button onClick={onTwoUp} className={btn} data-testid="rv-two-up">
           <Copy className="w-4 h-4" /> {twoUp ? 'Single Copy' : 'Two-Up'}
@@ -105,6 +112,8 @@ export default function ReceiptToolbar({
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }

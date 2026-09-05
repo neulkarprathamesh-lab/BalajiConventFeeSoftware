@@ -1,5 +1,6 @@
 import React from 'react';
 import ReceiptEngine from './ReceiptEngine';
+import { resolvePaperSource } from './PaperSizes';
 
 /**
  * ReceiptPrintPreview — the cashier-facing "PRINT RECEIPT" entry point.
@@ -24,8 +25,10 @@ export default function ReceiptPrintPreview({ r, receiptType, balance = null, se
   if (!r) return null;
 
   // The receipt paper is fixed to the approved artwork geometry regardless of
-  // any legacy per-type paper_size, and letterboxed onto A5 landscape media.
+  // any legacy per-type paper_size; the outer physical media follows the
+  // admin's Settings paper source (Special Receipt / A5 → A5, A4 → A4).
   const forcedType = { ...(receiptType || {}), paper_size: 'RECEIPT_142' };
+  const ps = resolvePaperSource(settings?.receipt_paper_source);
 
   return (
     <div
@@ -39,7 +42,7 @@ export default function ReceiptPrintPreview({ r, receiptType, balance = null, se
         data-testid="receipt-print-preview"
       >
         <div className="px-4 pt-3 text-[13px] font-semibold text-slate-700 flex items-center justify-between">
-          <span>FeeHub Print Preview — 210 × 142.8 mm landscape (A5 media)</span>
+          <span>FeeHub Print Preview — 210 × 142.8 mm landscape ({ps.label} media)</span>
         </div>
         <ReceiptEngine
           r={r}
@@ -48,7 +51,7 @@ export default function ReceiptPrintPreview({ r, receiptType, balance = null, se
           settings={settings}
           showControls={false}
           minimalPrint
-          outerPaper="A5_LANDSCAPE"
+          outerPaper={ps.outerPaper}
           onPrinted={onPrinted}
           onCancel={onClose}
         />

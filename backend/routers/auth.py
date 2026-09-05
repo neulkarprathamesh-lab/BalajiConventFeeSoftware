@@ -127,7 +127,7 @@ _MM_TOLERANCE = 0.05
 @router.patch("/settings")
 async def update_settings(body: Dict[str, Any], user = Depends(require_roles("administrator"))):
     await get_settings_doc()
-    allowed = {k: v for k, v in body.items() if k in ("school_name","school_address","school_phone","school_email","school_website","receipt_footer","notice_footer","bus_annual_months","q1_due_date","q2_due_date","q3_due_date","reminder_lead_days","manager_waiver_cap","receipt_printer_name","receipt_paper_width_mm","receipt_paper_height_mm","receipt_orientation","receipt_media_size","receipt_media_width_mm","receipt_media_height_mm","receipt_printer_verified","receipt_printer_verified_at","receipt_printer_verified_by")}
+    allowed = {k: v for k, v in body.items() if k in ("school_name","school_address","school_phone","school_email","school_website","receipt_footer","notice_footer","bus_annual_months","q1_due_date","q2_due_date","q3_due_date","reminder_lead_days","manager_waiver_cap","receipt_printer_name","receipt_paper_source","receipt_paper_width_mm","receipt_paper_height_mm","receipt_orientation","receipt_media_size","receipt_media_width_mm","receipt_media_height_mm","receipt_printer_verified","receipt_printer_verified_at","receipt_printer_verified_by")}
 
     if "receipt_paper_width_mm" in allowed:
         try:

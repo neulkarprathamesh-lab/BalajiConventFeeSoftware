@@ -238,7 +238,7 @@ export default function NewReceipt() {
           metadata: { class_name: student.class_name, guardian_name: student.guardian_name, guardian_mobile: student.guardian_mobile },
         });
         toast.success(`Receipt ${data.number} created`);
-        if (thenPrint) nav(`/receipts/${data.id}`); else nav('/receipts');
+        if (thenPrint) nav(`/receipts/${data.id}?print=1`); else nav('/receipts');
       } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
       finally { setBusy(false); }
       return;
@@ -276,10 +276,10 @@ export default function NewReceipt() {
       }
       if (createdReceipts.length === 1) {
         toast.success(`Receipt ${createdReceipts[0].number} created`);
-        if (thenPrint) nav(`/receipts/${createdReceipts[0].id}`); else nav('/receipts');
+        if (thenPrint) nav(`/receipts/${createdReceipts[0].id}?print=1`); else nav('/receipts');
       } else {
         toast.success(`${createdReceipts.length} receipts created (one per student)`);
-        if (thenPrint) nav(`/receipts/${createdReceipts[0].id}`); else nav('/receipts');
+        if (thenPrint) nav(`/receipts/${createdReceipts[0].id}?print=1`); else nav('/receipts');
       }
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to create receipt'); }
     finally { setBusy(false); }

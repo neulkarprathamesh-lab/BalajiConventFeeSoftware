@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { ArrowLeft, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import ReceiptEngine from '@/components/receipt/ReceiptEngine';
 import ReceiptPrintPreview from '@/components/receipt/ReceiptPrintPreview';
+import { resolvePaperSource } from '@/components/receipt/PaperSizes';
 
 /**
  * ReceiptView — thin page wrapper. All layout / print / export lives in the
@@ -18,6 +19,7 @@ import ReceiptPrintPreview from '@/components/receipt/ReceiptPrintPreview';
 export default function ReceiptView() {
   const { id } = useParams();
   const nav = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const [r, setR] = useState(null);
   const [rt, setRt] = useState(null);
@@ -42,6 +44,16 @@ export default function ReceiptView() {
     } catch {}
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [id]);
+  // Auto-open the FeeHub Print Preview when the cashier arrives straight from
+  // "Create & Print" (?print=1) — Create payment → Print Preview → Print.
+  useEffect(() => {
+    if (r && searchParams.get('print') === '1') {
+      setShowPreview(true);
+      searchParams.delete('print');
+      setSearchParams(searchParams, { replace: true });
+    }
+    /* eslint-disable-next-line */
+  }, [r]);
   // Balance Remaining is a frozen snapshot taken by the backend at the moment this
   // receipt was created (r.balance_after) — never a live ledger fetch.
   const balance = r && r.balance_after != null ? { amount: r.balance_after, loading: false } : null;
@@ -72,8 +84,10 @@ export default function ReceiptView() {
   );
 
   // The receipt's approved artwork geometry is fixed at 210×142.8mm landscape
-  // for every receipt type; letterboxed onto A5 landscape physical media.
+  // for every receipt type; the outer physical media follows the admin's
+  // Settings paper source (Special Receipt / A5 → A5, A4 → A4), letterboxed.
   const forcedType = rt ? { ...rt, paper_size: 'RECEIPT_142' } : { paper_size: 'RECEIPT_142' };
+  const outerPaper = resolvePaperSource(settings?.receipt_paper_source).outerPaper;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -87,7 +101,8 @@ export default function ReceiptView() {
           balance={balance}
           settings={settings}
           showControls={false}
-          outerPaper="A5_LANDSCAPE"
+          printOnly
+          outerPaper={outerPaper}
         />
       </div>
       {showPreview && (

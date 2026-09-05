@@ -1,0 +1,36 @@
+{
+  "summary": "Retest of the new auto-open-preview cashier flow and the receipt Print routing. All 6 requested checks PASSED. Preview auto-opens on /receipts/:id?print=1 with correct real data, geometry is exactly 210x142.8mm (scrollHeight 142.35mm, no clipping), rv-print-direct shows the inline 'not yet available on this build' error without triggering window.print or navigation, Cancel closes the modal, the toolbar rv-print (no ?print=1) opens the same preview modal (never window.print), Settings 'Print Test Receipt' opens the preview with SAMPLE data (TEST STUDENT, AMOUNT RECEIVED) while URL stays on /settings, and receipts count remains 1 (no new receipts created).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "measurements": {
+    "receipt_frame_widthMm": 210.00,
+    "receipt_frame_heightMm": 142.80,
+    "receipt_frame_scrollHeightMm": 142.35,
+    "widthPx": 793.69,
+    "heightPx": 539.70,
+    "scrollHeightPx": 538,
+    "mm_conversion": "96/25.4"
+  },
+  "test_results": {
+    "auto_open_preview_with_print_1": "PASS - modal opened, contains SEC-2026-000001, Aaradhya, TUITION FEE 4,500, ADMISSION FEE 1,000, TOTAL 5,500, AMOUNT RECEIVED, AMOUNT IN WORDS, title mentions 210 x 142.8 mm landscape (A5 media)",
+    "geometry_210x142.8": "PASS - width=210.00mm, height=142.80mm, scrollHeight=142.35mm (<=142.8), no clipping, no 2nd page",
+    "rv_print_direct_inline_error": "PASS - window.print NOT called, URL unchanged, modal contains 'not yet available on this build', modal stays open, Cancel closes modal",
+    "rv_print_toolbar_opens_preview": "PASS - without ?print=1 modal does NOT auto-open; clicking [data-testid=rv-print] opens receipt-print-preview; window.print NOT called",
+    "settings_test_print_sample_data": "PASS - saved printer name, clicked Print Test Receipt, preview opened with TEST STUDENT + AMOUNT RECEIVED, URL remained /settings",
+    "no_new_receipts": "PASS - GET /api/receipts count = 1 (unchanged from seeded SEC-2026-000001)"
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "test_credentials": "admin@balajiconvent.in / admin123 via server-local http://localhost:8001/api/auth/login (remote admin login blocked by design)",
+  "seed_data_creation": "None (used pre-seeded receipt 9d3ac77c-578f-46bb-88ae-01655fa7c03c / SEC-2026-000001)",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All flows working. Note: to log in as admin from Playwright you must POST http://localhost:8001/api/auth/login via bash and inject the token into localStorage.setItem('bc_token', <token>) with add_init_script BEFORE navigation - remote /api/auth/login is 403 for admin by design."
+}

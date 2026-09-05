@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState, useEffect } from 'react';
 import ReceiptFrame from './ReceiptFrame';
 import ReceiptToolbar from './ReceiptToolbar';
 import { ReceiptHeader, ReceiptFooter, StatusRibbons, Watermark, BalanceRemaining, SignatureBlock } from './ReceiptPrimitives';
-import { paperOptions, DEFAULT_PAPER } from './PaperSizes';
+import { paperOptions, DEFAULT_PAPER, resolvePaperSource } from './PaperSizes';
 import FeeReceiptBody from './templates/FeeReceiptBody';
 import DebitVoucherBody from './templates/DebitVoucherBody';
 import MoneyReceiptBody from './templates/MoneyReceiptBody';
@@ -46,6 +46,7 @@ export default function ReceiptEngine({
   onPrintPreview = null, // when set, the toolbar Print button opens the FeeHub Print Preview modal
                           //   (one authoritative print system) instead of the legacy window.print path.
   onPrinted = null,      // success-only callback (audit/reprint bump) for the minimal cashier print flow.
+  printOnly = false,     // when true the toolbar shows ONE Print button only (no PDF/PNG/export/two-up).
 }) {
   const nodeRef = useRef(null);
   const [paper, setPaper] = useState(receiptType?.paper_size || DEFAULT_PAPER);
@@ -136,6 +137,7 @@ export default function ReceiptEngine({
             onTwoUp={publicMode ? undefined : () => setTwoUp(v => !v)}
             extraActions={extraActions}
             publicMode={publicMode}
+            printOnly={printOnly}
           />
         )}
       </div>
@@ -276,17 +278,14 @@ function MinimalPrintCancelBar({ settings, onPrint, onPrinted, onCancel }) {
     setError(null);
     try {
       if (onPrint) await onPrint();
+      const ps = resolvePaperSource(settings?.receipt_paper_source);
       const res = await printReceiptDirect({
         deviceName: settings?.receipt_printer_name,
-        landscape: (settings?.receipt_orientation || 'landscape') === 'landscape',
-        // Physical media sent to the driver as a STANDARD NAMED size (reliable
-        // across Windows/Chromium/GDI printers like the P1007) — default A5.
-        // The 210×142.8mm receipt artwork is letterboxed inside it by CSS.
-        pageSizeName: settings?.receipt_media_size || 'A5',
-        // Optional custom-size fallback for future printers that support a true
-        // 210×142.8mm form; ignored when pageSizeName is honored by the driver.
-        widthMm: settings?.receipt_media_width_mm,
-        heightMm: settings?.receipt_media_height_mm,
+        landscape: ps.landscape !== false,
+        // Application paper source → STANDARD NAMED driver page size (reliable
+        // across Windows/Chromium/GDI printers). The 210×142.8mm receipt
+        // artwork is letterboxed inside it by CSS. Printer-agnostic.
+        pageSizeName: ps.pageSizeName,
       });
       if (!res.ok) setError(res.error || 'The configured receipt printer is unavailable or the print job could not be sent. Please check the printer and try again.');
       else if (onPrinted) await onPrinted();

@@ -81,11 +81,11 @@ export default function Settings() {
               <input className={inp} data-testid="settings-receipt-printer-name" placeholder="e.g. HP LaserJet P1007" value={s.receipt_printer_name || ''} onChange={e=>set('receipt_printer_name', e.target.value)} />
             </F>
             <div className="grid grid-cols-2 gap-3">
-              <F label="Physical Media (loaded landscape)">
-                <select className={inp} data-testid="settings-receipt-media" value={s.receipt_media_size || 'A5'} onChange={e=>set('receipt_media_size', e.target.value)}>
+              <F label="Paper Source (recommended: Special Receipt)">
+                <select className={inp} data-testid="settings-receipt-media" value={s.receipt_paper_source || 'SPECIAL'} onChange={e=>set('receipt_paper_source', e.target.value)}>
+                  <option value="SPECIAL">Special Receipt (210 × 142.8 mm on A5)</option>
                   <option value="A5">A5 (210 × 148 mm)</option>
                   <option value="A4">A4 (210 × 297 mm)</option>
-                  <option value="Letter">Letter</option>
                 </select>
               </F>
               <F label="Receipt Artwork (fixed)">
@@ -93,7 +93,7 @@ export default function Settings() {
               </F>
             </div>
             <div className="text-[12px] text-slate-500">
-              The receipt artwork is always 210 × 142.8 mm landscape and is centered (letterboxed) on the physical media — never stretched or scaled. Printing is silent to the printer above; no cashier print dialog.
+              FeeHub uses three application-level paper sources only (A4 / A5 / Special Receipt). The receipt artwork is always 210 × 142.8 mm landscape and is centered (letterboxed) on the selected media — never stretched, scaled, or fit-to-page. Printing is silent to the printer above; no cashier print dialog, orientation, or scale choices.
             </div>
             <button
               onClick={() => { if (!s.receipt_printer_name) { toast.error('Enter and save the printer name first.'); return; } setShowTest(true); }}

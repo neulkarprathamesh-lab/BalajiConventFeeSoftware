@@ -15,8 +15,7 @@ Receipt data → ReceiptEngine (one renderer) → ReceiptFrame (210×142.8 artwo
 (screen) | webContents.print(deviceName, pageSize:'A5', landscape, silent) (paper) }.
 Same DOM (.print-target) for both ⇒ preview == physical print.
 
-## Implemented (2026-06 / this session)
-- Rebuilt FeeReceiptBody to the approved reference layout (2-col DETAILS; fee
+## Implemented (2026-06 / this session)- Rebuilt FeeReceiptBody to the approved reference layout (2-col DETAILS; fee
   table left + payment panel right). Fixed the vertical overflow (was ~150.6mm
   → now measured 142.35mm at true geometry; width 210.00mm).
 - Compact BusReceiptBody for the print geometry (was 191mm → 142.35mm). Debit
@@ -43,6 +42,14 @@ Same DOM (.print-target) for both ⇒ preview == physical print.
 ## NOT verified here (must run on Windows — see docs/BUILD_TEST_BUILDS.md)
 - Physical HP LaserJet P1007 A5 print (no printer in this Linux env).
 - Windows .exe builds (no Windows toolchain here).
+
+## Final UI refinements (this session, verified iteration_3 100%)
+- Receipt view shows ONE primary Print button only (no PDF/PNG/export/two-up).
+  Flow: Create & Print → /receipts/:id?print=1 → Print Preview auto-opens → Print.
+- Settings Paper Source = exactly three app-level choices: A4 / A5 / Special
+  Receipt (default SPECIAL). No raw Windows paper list. Mapped to named driver
+  size (A5/A4) + landscape; 210×142.8 artwork letterboxed, never stretched.
+  Backend accepts receipt_paper_source. Preview media label reflects selection.
 
 ## Backlog / next
 - P0: Build + run TEST Client EXE and TEST Server on Windows; physical P1007 A5

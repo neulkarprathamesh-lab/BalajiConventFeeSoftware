@@ -24,3 +24,22 @@ export const paperCss = (key) => {
 };
 
 export const paperOptions = () => Object.entries(PAPER_SIZES).map(([k, v]) => ({ value: k, label: v.label }));
+
+/**
+ * Application-level paper sources — the ONLY three choices FeeHub exposes.
+ * Never a raw dump of every Windows/Chromium driver paper size. Each maps to a
+ * physical media page size (pageSizeName, sent to the driver) + the outer media
+ * key used to letterbox the fixed 210×142.8mm receipt artwork inside it.
+ */
+export const PAPER_SOURCES = {
+  SPECIAL: { label: 'Special Receipt (210 × 142.8 mm on A5)', pageSizeName: 'A5', outerPaper: 'A5_LANDSCAPE', landscape: true },
+  A5:      { label: 'A5 (210 × 148 mm)',                       pageSizeName: 'A5', outerPaper: 'A5_LANDSCAPE', landscape: true },
+  A4:      { label: 'A4 (210 × 297 mm)',                       pageSizeName: 'A4', outerPaper: 'A4_LANDSCAPE', landscape: true },
+};
+export const DEFAULT_PAPER_SOURCE = 'SPECIAL';
+export const resolvePaperSource = (k) => PAPER_SOURCES[k] || PAPER_SOURCES[DEFAULT_PAPER_SOURCE];
+export const paperSourceOptions = () => [
+  { value: 'A4', label: 'A4' },
+  { value: 'A5', label: 'A5' },
+  { value: 'SPECIAL', label: 'Special Receipt' },
+];
