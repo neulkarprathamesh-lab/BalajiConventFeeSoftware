@@ -56,3 +56,15 @@ Same DOM (.print-target) for both ⇒ preview == physical print.
   ruler test; toggle main.js landscape/media if physical output is rotated.
 - P1: Optionally gate /print-lab behind a dev flag before production.
 - P2: Verify JC-ACS bifurcation and long-name/many-line edge cases physically.
+
+## Standalone print-diagnostic + GitHub Actions (this session)
+- Standalone Electron tool at print-diagnostic/ (synthetic data, no server/DB;
+  Electron webContents.print, never window.print). Verified DB/server-free.
+- ADDED .github/workflows/build-print-diagnostic-windows.yml: builds on
+  windows-latest (Node 20, Yarn classic frozen lockfile, `yarn dist`), uploads
+  artifact FeeHub-Print-Diagnostic-Windows (NSIS installer +
+  FeeHub-Print-Diagnostic-Test[-Portable]-1.0.0.exe). Triggers: workflow_dispatch
+  + push to print-diagnostic/**. .gitignore already excludes node_modules/dist/.env.
+- STATUS: workflow file created locally in canonical repo. NOT pushed (user pushes
+  via their own token/Save-to-Github). GitHub Actions run NOT executed here; no
+  Windows EXE produced/verified in this environment.
