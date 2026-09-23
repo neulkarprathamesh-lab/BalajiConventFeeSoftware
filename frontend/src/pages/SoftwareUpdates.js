@@ -3,6 +3,7 @@ import api, { API_BASE } from '@/lib/api';
 import { PageHeader } from '@/components/Layout';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
+import AdminPinPrompt from '@/components/AdminPinPrompt';
 import {
   Rocket, UploadCloud, ShieldCheck, ShieldAlert, FileArchive, History,
   Undo2, CheckCircle2, XCircle, Loader2, Info, Clock, KeyRound, FileText,
@@ -355,8 +356,177 @@ export default function SoftwareUpdates() {
             <ShieldAlert className="w-4 h-4" /> Only Administrators can upload or install software updates. This page is read-only for your role.
           </div>
         )}
+
+        <ClientUpdatesSection isAdmin={isAdmin} />
       </div>
     </>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Client (Electron shell) update distribution - completely separate from the
+// Server .bcupdate system above. A Client update replaces only the Electron
+// app's own code on each Client PC (never this Main Server's own backend/
+// frontend), is applied entirely by the Client itself with no admin login
+// needed there, and is signed with its own dedicated key. See
+// backend/routers/updates.py's client_router and updater/client-update.js.
+// -----------------------------------------------------------------------------
+function ClientUpdatesSection({ isAdmin }) {
+  const [history, setHistory] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [pinPrompt, setPinPrompt] = useState(null); // {mode:'pin', title, message, onOk} - see AdminPinPrompt
+  const fileRef = useRef(null);
+
+  const [reports, setReports] = useState([]);
+  const load = useCallback(() => {
+    api.get('/client-updates/history').then(r => setHistory(r.data || [])).catch(() => {});
+    if (isAdmin) api.get('/client-updates/reports').then(r => setReports(r.data || [])).catch(() => {});
+  }, [isAdmin]);
+  useEffect(() => { load(); }, [load]);
+  const resolveReport = async (id) => {
+    try { await api.post(`/client-updates/reports/${id}/resolve`); load(); }
+    catch (e) { toast.error('Could not resolve'); }
+  };
+
+  const published = history.find(h => h.is_published);
+  // NOTE: this must never use window.prompt() - Electron's BrowserWindow does
+  // not implement it (it silently returns null with no dialog shown at all,
+  // unlike window.alert/confirm which Electron does support), which made PIN
+  // entry here silently no-op inside the desktop app. Reuse the same
+  // AdminPinPrompt modal already used elsewhere in the app (e.g. ReceiptTypes.js)
+  // instead.
+  const askPin = (title, message) => new Promise((resolve) => {
+    setPinPrompt({
+      mode: 'pin', title, message,
+      onOk: async (headers) => { resolve(headers['X-Admin-PIN']); },
+    });
+  });
+  const pickFile = () => fileRef.current?.click();
+
+  const onFileChosen = async (e) => {
+    const file = e.target.files?.[0]; e.target.value = '';
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.bcupdate')) return toast.error('Please choose a file with the .bcupdate extension.');
+    const pin = await askPin('Publish Client Update', `Enter your Administrator PIN to publish "${file.name}" to all Client PCs.`);
+    if (!pin) return;
+    setBusy(true);
+    try {
+      const form = new FormData(); form.append('file', file);
+      const r = await fetch(`${API}/api/client-updates/publish`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'X-Admin-Pin': pin, Authorization: `Bearer ${localStorage.getItem('bc_token') || ''}` },
+        body: form,
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        try { throw new Error(JSON.parse(txt).detail || txt); } catch { throw new Error(txt); }
+      }
+      const data = await r.json();
+      toast.success(`Client update v${data.version} published — PCs will detect it automatically.`);
+      load();
+    } catch (err) {
+      toast.error(String(err.message || err));
+    } finally { setBusy(false); }
+  };
+
+  const doUnpublish = async () => {
+    if (!published) return;
+    if (!window.confirm(`Unpublish Client update v${published.version}? PCs will stop being offered it.`)) return;
+    const pin = await askPin('Unpublish Client Update', `Enter your Administrator PIN to unpublish v${published.version}. Client PCs will stop being offered it.`);
+    if (!pin) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/client-updates/unpublish`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'X-Admin-Pin': pin, Authorization: `Bearer ${localStorage.getItem('bc_token') || ''}` },
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast.success('Client update unpublished.');
+      load();
+    } catch (e) { toast.error(String(e.message || e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <section className="bg-white border border-slate-200 rounded-xl overflow-hidden" data-testid="client-updates-section">
+      <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 flex items-center gap-2">
+        <Rocket className="w-4 h-4 text-slate-500" /><h2 className="text-sm font-semibold text-slate-800">Client Updates (Cashier/Client PCs)</h2>
+      </div>
+      <div className="p-4 space-y-4">
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold">Currently Published</div>
+            {published ? (
+              <div className="mt-1">
+                <div className="font-mono text-2xl font-bold text-slate-900">v{published.version}</div>
+                <div className="text-[12px] text-slate-600 mt-1">{fmtBytes(published.size_bytes)} · SHA-256 <span className="font-mono">{(published.sha256 || '').slice(0, 12)}…</span></div>
+                <div className="text-[11px] text-slate-500 mt-1">Published {fmtDate(published.published_at)} by {published.published_by}</div>
+                {isAdmin && (
+                  <button onClick={doUnpublish} disabled={busy} className="mt-2 h-8 px-3 border border-red-300 text-red-700 rounded text-[12px] hover:bg-red-50 disabled:opacity-50" data-testid="client-update-unpublish">
+                    Unpublish
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="mt-1 text-[13px] text-slate-500">No Client update is currently published. Client PCs continue running their installed version.</div>
+            )}
+          </div>
+          {isAdmin && (
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Publish a new version</div>
+              <div onClick={!busy ? pickFile : undefined} className={`border-2 border-dashed rounded-lg p-4 text-center ${!busy ? 'border-slate-300 hover:border-blue-500 hover:bg-blue-50 cursor-pointer' : 'border-slate-200 opacity-60'}`} data-testid="client-update-dropzone">
+                <UploadCloud className="w-6 h-6 mx-auto text-slate-500" />
+                <div className="mt-1 text-[13px] font-medium text-slate-800">{busy ? 'Publishing…' : 'Click to choose a BalajiFeeHub-Client-vX.Y.Z.bcupdate file'}</div>
+                <div className="mt-1 text-[11px] text-slate-500">Max 300 MB · Administrator PIN required · must be a strict version upgrade</div>
+              </div>
+              <input ref={fileRef} type="file" accept=".bcupdate" className="hidden" onChange={onFileChosen} data-testid="client-update-file-input" />
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold mb-1">History</div>
+          <table className="w-full dense-table">
+            <thead><tr className="text-left text-[11px] uppercase tracking-wide text-slate-600"><th className="pl-1 py-1">Version</th><th>Size</th><th>Published</th><th>By</th><th>Status</th></tr></thead>
+            <tbody>
+              {history.length === 0 && <tr><td colSpan={5} className="text-center py-4 text-slate-500 text-[13px]">No Client updates published yet.</td></tr>}
+              {history.map(h => (
+                <tr key={h.id} className="border-t border-slate-100">
+                  <td className="pl-1 py-1.5 font-mono text-[12px]">v{h.version}</td>
+                  <td className="text-[12px]">{fmtBytes(h.size_bytes)}</td>
+                  <td className="text-[12px] text-slate-600">{fmtDate(h.published_at)}</td>
+                  <td className="text-[12px]">{h.published_by}</td>
+                  <td>{h.is_published ? <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">PUBLISHED</span> : <span className="text-[11px] text-slate-400">unpublished</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {isAdmin && reports.length > 0 && (
+          <div data-testid="client-update-diagnostics">
+            <div className="text-[11px] uppercase tracking-widest text-red-600 font-semibold mb-1">Update Failures Needing Attention</div>
+            <table className="w-full dense-table">
+              <thead><tr className="text-left text-[11px] uppercase tracking-wide text-slate-600"><th className="pl-1 py-1">PC</th><th>Current</th><th>Target</th><th>Stage</th><th>Error</th><th>When</th><th></th></tr></thead>
+              <tbody>
+                {reports.map(r => (
+                  <tr key={r.id} className="border-t border-slate-100">
+                    <td className="pl-1 py-1.5">{r.pc_hostname}</td>
+                    <td className="text-[12px] font-mono">{r.installed_version}</td>
+                    <td className="text-[12px] font-mono">{r.target_version}</td>
+                    <td className="text-[12px]">{r.ok ? <span className="text-emerald-700">{r.stage}</span> : <span className="text-red-700">{r.stage}</span>}</td>
+                    <td className="text-[12px] text-red-700 max-w-xs truncate" title={r.error_message}>{r.error_message}</td>
+                    <td className="text-[12px] text-slate-500">{fmtDate(r.received_at)}</td>
+                    <td><button onClick={() => resolveReport(r.id)} className="text-[11px] text-blue-700 hover:underline">Mark Resolved</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      <AdminPinPrompt prompt={pinPrompt} onClose={() => setPinPrompt(null)} />
+    </section>
   );
 }
 

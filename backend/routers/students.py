@@ -1,10 +1,12 @@
 """Students CRUD, ledger, siblings, bulk import/delete/reassign."""
 import asyncio
+import re
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Response
 from core import (
     db, StudentIn, audit, gen_id, get_current_user, now_iso, require_roles,
+    eligible_receipt_codes_for_class, compute_fee_items, apply_opening_paid,
 )
 
 router = APIRouter(prefix="/api", tags=["students"])
@@ -16,29 +18,70 @@ def _month_label(month: str) -> str:
     except Exception:
         return month
 
+
 @router.get("/students")
 async def list_students(
     q: Optional[str] = None,
     department_id: Optional[str] = None,
     class_id: Optional[str] = None,
     class_name: Optional[str] = None,
+    medium: Optional[str] = None,
+    stream: Optional[str] = None,
+    section: Optional[str] = None,
+    bus_required: Optional[bool] = None,
     limit: int = 100,
     user = Depends(get_current_user),
 ):
-    query: Dict[str, Any] = {}
+    # 'duplicate' is a terminal status set only by the one-off duplicate-
+    # student consolidation flow (a student record merged into another
+    # surviving admission no.) — it must never appear in a normal listing,
+    # the whole point of marking it that way instead of hard-deleting it.
+    query: Dict[str, Any] = {"status": {"$ne": "duplicate"}}
     if department_id: query["department_id"] = department_id
     if class_id: query["class_id"] = class_id
+    # Students screen's Medium filter (Secondary only — Class 9/10 English vs
+    # Marathi). Matches the student's own stored `medium` field directly, the
+    # same field every class doc's medium is kept in sync with.
+    if medium: query["medium"] = medium
+    # Students screen's Stream filter (Junior College only — Class 11/12
+    # Arts/Commerce/Science/Bi-Focal). Matches the student's own stored
+    # `stream` field directly — the same field every class doc's stream is
+    # kept in sync with (verified zero mismatches app-wide). Without this,
+    # `class_name` alone (below) matches every stream sharing that class
+    # name, which was the actual bug: selecting "Class 11" + a stream with
+    # no way to narrow further meant every 11th-grade student showed up
+    # regardless of stream.
+    if stream: query["stream"] = stream
+    # Section filter — Classes 1-8 real A/B/C sections (and any other class
+    # where section is meaningfully set). Same exact-match-on-student's-own-
+    # stored-field pattern as medium/stream, so Class + Medium + Section (or
+    # any combination) all AND together consistently, the same one filtering
+    # system used everywhere else in this endpoint — not a class-specific
+    # special case.
+    if section: query["section"] = section
+    # Used by the BUS receipt search so only students with a currently active
+    # bus assignment are selectable — same bus_required flag already trusted
+    # elsewhere in the app (e.g. the dashboard's active-bus-students count).
+    if bus_required is not None: query["bus_required"] = bus_required
     if class_name:
-        # Class-only filter (no section/medium split): match every class doc with this exact
-        # name across every department/medium/stream, e.g. "Class 9" covers both English and
-        # Semi Medium 9th-grade students in one filter.
+        # Class-only filter (no section/medium/stream split): match every class doc with this
+        # exact name across every department/medium/stream, e.g. "Class 9" covers both English
+        # and Semi Medium 9th-grade students, and "Class 11" covers all four streams — narrow
+        # further with `medium`/`stream` above when that's not wanted.
         ids = [c["id"] async for c in db.classes.find({"name": class_name}, {"_id": 0, "id": 1})]
         query["class_id"] = {"$in": ids}
     if q:
+        # re.escape makes every regex metacharacter in the user's search text
+        # (parentheses, brackets, +, ., *, etc.) literal, so it's matched as
+        # plain text instead of being interpreted as regex syntax - otherwise
+        # a search like "O (Brien" throws an uncaught MongoDB OperationFailure
+        # ("missing closing parenthesis") instead of just finding no results.
+        # Still a case-insensitive partial/substring match, same as before.
+        safe_q = re.escape(q)
         query["$or"] = [
-            {"admission_no": {"$regex": q, "$options": "i"}},
-            {"name": {"$regex": q, "$options": "i"}},
-            {"guardian_mobile": {"$regex": q, "$options": "i"}},
+            {"admission_no": {"$regex": safe_q, "$options": "i"}},
+            {"name": {"$regex": safe_q, "$options": "i"}},
+            {"guardian_mobile": {"$regex": safe_q, "$options": "i"}},
         ]
     return await db.students.find(query, {"_id":0}).limit(limit).to_list(limit)
 
@@ -48,10 +91,88 @@ async def get_student(sid: str, user = Depends(get_current_user)):
     if not s: raise HTTPException(404, "Student not found")
     return s
 
+@router.get("/students/{sid}/eligible-receipt-types")
+async def eligible_receipt_types(sid: str, user = Depends(get_current_user)):
+    """Which receipt type(s) this student's actual class/medium/stream/bus
+    status qualify for, using the SAME eligible_receipt_codes_for_class rule
+    the backend enforces at receipt-creation time (core.py) — so the frontend
+    never has its own, potentially-drifting copy of this logic.
+    Returns: { primary, eligible: [{id,code,name}], bus_eligible, notes }
+    `primary` is the single most-specific match (never EMJC) for auto-select;
+    `eligible` lists every receipt_type this student could legitimately use,
+    including EMJC (as a non-primary option) and BUS only if bus_required."""
+    student = await db.students.find_one({"id": sid}, {"_id": 0})
+    if not student:
+        raise HTTPException(404, "Student not found")
+    class_doc = await db.classes.find_one({"id": student.get("class_id")}, {"_id": 0}) if student.get("class_id") else None
+    dept = await db.departments.find_one({"id": student.get("department_id")}, {"_id": 0}) if student.get("department_id") else None
+    dept_code = dept.get("code") if dept else None
+
+    specific_codes, notes = eligible_receipt_codes_for_class(
+        class_doc.get("name") if class_doc else None,
+        student.get("medium"),
+        student.get("stream"),
+    )
+    all_types = await db.receipt_types.find({"enabled": True}, {"_id": 0}).to_list(50)
+
+    eligible = []
+    matched_types = []
+    for t in all_types:
+        code = t.get("code")
+        allowed = t.get("applicable_dept_codes") or []
+        if dept_code and allowed and dept_code not in allowed:
+            continue  # wrong department entirely
+        if code == "BUS":
+            if student.get("bus_required"):
+                eligible.append({"id": t["id"], "code": code, "name": t["name"]})
+            continue
+        if code == "DV":
+            continue  # not a student academic receipt
+        if code == "EMJC":
+            eligible.append({"id": t["id"], "code": code, "name": t["name"]})  # always available, never primary
+            continue
+        if code in specific_codes:
+            eligible.append({"id": t["id"], "code": code, "name": t["name"]})
+            matched_types.append(t)
+
+    # When more than one specific code matches (only possible for Class 11/12,
+    # where both JC and JCACS can be eligible for a canonical stream), JC is
+    # always the auto-selected primary — JCACS stays listed in `eligible` for
+    # manual selection but is never auto-picked. For every other class this is
+    # a no-op since there's only ever one matched type.
+    primary = None
+    if matched_types:
+        jc_match = next((t for t in matched_types if t.get("code") == "JC"), None)
+        primary = (jc_match or matched_types[0])["id"]
+
+    return {
+        "primary": primary,
+        "eligible": eligible,
+        "bus_eligible": bool(student.get("bus_required")),
+        "class_name": class_doc.get("name") if class_doc else None,
+        "medium": student.get("medium"),
+        "stream": student.get("stream"),
+        "notes": notes,
+    }
+
 @router.get("/students/{sid}/ledger")
 async def student_ledger(sid: str, user = Depends(get_current_user)):
     s = await db.students.find_one({"id": sid}, {"_id":0})
     if not s: raise HTTPException(404, "Not found")
+    # Denormalised purely for display (Student Profile academic-identity
+    # header) - class_id/department_id stay the source of truth everywhere
+    # else; medium/stream already live directly on the student document for
+    # Junior College, class_name/department_name do not and are looked up
+    # once here rather than pushed onto every frontend consumer.
+    if s.get("class_id"):
+        cls = await db.classes.find_one({"id": s["class_id"]}, {"_id": 0})
+        if cls:
+            s["class_name"] = cls.get("name")
+            if not s.get("medium"): s["medium"] = cls.get("medium")
+            if not s.get("stream"): s["stream"] = cls.get("stream")
+    if s.get("department_id"):
+        dept = await db.departments.find_one({"id": s["department_id"]}, {"_id": 0, "name": 1})
+        if dept: s["department_name"] = dept.get("name")
     receipts = await db.receipts.find({"student_id": sid, "status":{"$ne":"cancelled"}}, {"_id":0}).sort("created_at", -1).to_list(500)
     adjustments = await db.adjustments.find({"student_id": sid, "status":"approved"}, {"_id":0}).to_list(200)
     fs = None
@@ -65,21 +186,73 @@ async def student_ledger(sid: str, user = Depends(get_current_user)):
     bus_assignments = await db.bus_assignments.find({"student_id": sid}, {"_id":0}).sort("effective_from", -1).to_list(200)
     bus_charges = await db.bus_charges.find({"student_id": sid}, {"_id":0}).sort("month", -1).to_list(500)
     bus_outstanding = sum(max(0, c.get("amount", 0) - c.get("amount_paid", 0)) for c in bus_charges if c.get("status") != "paid")
-    total_paid = sum(r.get("total", 0) for r in receipts if r.get("receipt_type") not in ("refund","debit_voucher"))
-    total_refunded = sum(r.get("total", 0) for r in receipts if r.get("receipt_type") == "refund")
-    total_adjusted = sum(a.get("amount", 0) for a in adjustments)
-    school_payable = (fs.get("total") if fs else 0) - total_paid - total_adjusted + total_refunded
     ob_doc = await db.student_opening_balances.find_one(
         {"student_id": sid, "academic_year": s.get("academic_year") or "2026-27"}, {"_id": 0}
     )
     opening_balance = ob_doc.get("amount", 0) if ob_doc else 0
+
+    # Opening-paid — amount this student had already paid BEFORE FeeHub went
+    # live (verified from the school's real prior records/Excel, imported into
+    # the fee_details collection with a per-row audit trail — never a fake
+    # receipt, per the explicit rule against synthetic transactions). fee_details
+    # is otherwise deliberately decoupled from the live receipts ledger, but a
+    # genuine pre-go-live payment must still count as "paid" on the Fee Update
+    # screen, or every migrated student wrongly shows ₹0 paid despite real
+    # money already collected. Added once, on top of live receipts — never
+    # replacing them — so this is additive carry-forward, not double counting.
+    fee_detail_doc = await db.fee_details.find_one(
+        {"student_id": sid, "academic_year": s.get("academic_year") or "2026-27"}, {"_id": 0}
+    )
+    opening_paid = float(fee_detail_doc.get("total_paid") or 0) if fee_detail_doc else 0
+
+    # Per-item breakdown (Option A) — merges this student's fee_overrides on top
+    # of the shared fee_structure.items[], with paid/outstanding/status always
+    # DERIVED live from real receipt lines (never a stored status field). This
+    # is now the single authoritative source for "what does this student still
+    # owe, per fee head/installment" — the frontend no longer computes this
+    # itself. Existing students with no override see exactly the shared items,
+    # unchanged from before this field was added.
+    overrides = await db.student_fee_overrides.find(
+        {"student_id": sid, "academic_year": s.get("academic_year") or "2026-27"}, {"_id": 0}
+    ).to_list(20)
+    fee_items = compute_fee_items((fs.get("items") if fs else None) or [], overrides, receipts)
+
+    # Carry the opening-paid figure INTO the per-head breakdown too (not just
+    # the top-level total) — filled head-by-head, oldest/first head in the fee
+    # structure first, until exhausted. Without this, the header "Paid" card
+    # would be correct but every individual head below it would still show
+    # ₹0 paid / full outstanding, so New Receipt would prompt the cashier to
+    # re-collect money the family already paid before FeeHub existed. Any
+    # leftover that doesn't fit inside the student's current fee items (e.g.
+    # the fee structure changed since the historical payment) is still added
+    # into total_paid below, so the headline figure never silently loses it.
+    fee_items, opening_paid_unabsorbed = apply_opening_paid(fee_items, opening_paid)
+
+    # total_paid = SCHOOL fee paid only, matched per fee-head line exactly like
+    # compute_fee_items() does — NOT a raw sum of every receipt's total. Bus Fee
+    # and Bus receipts are tracked entirely separately (bus_charges/bus_outstanding
+    # above); a bus payment must never silently reduce the school total below,
+    # or "Outstanding" would drop by the bus amount even though no school fee
+    # was paid. (Previously this summed every non-refund/non-debit_voucher
+    # receipt's total regardless of type, which double-counted bus/misc
+    # payments against the school fee balance — fixed here.) Opening-paid
+    # (pre-FeeHub, imported from fee_details, see above) is already folded
+    # into fee_items' paid; opening_paid_unabsorbed covers only the remainder
+    # that didn't fit any current head.
+    total_paid = sum(it["paid"] for it in fee_items) + opening_paid_unabsorbed
+    total_refunded = sum(r.get("total", 0) for r in receipts if r.get("receipt_type") == "refund")
+    total_adjusted = sum(a.get("amount", 0) for a in adjustments)
+    school_payable = (fs.get("total") if fs else 0) - total_paid - total_adjusted + total_refunded
+
     return {
         "student": s, "fee_structure": fs, "receipts": receipts, "adjustments": adjustments,
         "bus_assignments": bus_assignments, "bus_charges": bus_charges, "bus_outstanding": bus_outstanding,
+        "opening_paid": opening_paid, "fee_details_on_record": fee_detail_doc,
         "total_paid": total_paid, "total_refunded": total_refunded,
         "total_adjusted": total_adjusted, "school_outstanding": max(0, school_payable),
         "opening_balance": opening_balance,
         "outstanding": max(0, school_payable) + bus_outstanding + opening_balance,
+        "fee_items": fee_items, "fee_overrides": overrides,
     }
 
 @router.post("/students")
@@ -130,10 +303,10 @@ async def bulk_import_students(body: Dict[str, Any], user = Depends(require_role
             stream = None
             if medium == "Junior College":
                 if not raw_stream:
-                    errors.append({"row": idx+1, "error": "Junior College students must include a Stream (Arts/Commerce/Science/Electronics/Fisheries)", "data": r}); continue
+                    errors.append({"row": idx+1, "error": "Junior College students must include a Stream (Arts/Commerce/Science/Bi-Focal)", "data": r}); continue
                 stream = canonical_stream(raw_stream)
                 if not stream:
-                    errors.append({"row": idx+1, "error": f"unknown stream '{raw_stream}' — allowed: Arts, Commerce, Science, Electronics, Fisheries", "data": r}); continue
+                    errors.append({"row": idx+1, "error": f"unknown stream '{raw_stream}' — allowed: Arts, Commerce, Science, Bi-Focal", "data": r}); continue
             elif raw_stream:
                 # Non-JC row must NOT carry a stream — protects against Class 5 English being mis-tagged
                 errors.append({"row": idx+1, "error": f"Stream '{raw_stream}' only allowed for Junior College rows", "data": r}); continue
@@ -297,8 +470,17 @@ async def assign_bus_stop(sid: str, body: Dict[str, Any], user = Depends(require
     if not stop:
         raise HTTPException(404, f"Bus stop #{stop_no} not found")
     effective_from = body.get("effective_from") or now_iso()[:10]
+    # Optional per-student fee override (Phase 6/7 "individual update") - when
+    # given, THIS student's new assignment captures this explicit fee instead
+    # of the stop's standard rate (e.g. a sibling discount). Omit it (every
+    # existing caller does) and behavior is byte-for-byte unchanged - the
+    # stop's own current monthly_fee is captured, exactly as before.
+    fee_override = body.get("monthly_fee_override")
+    reason = body.get("reason")
+    effective_fee = float(fee_override) if fee_override is not None else stop.get("monthly_fee", 0)
 
     # Close any currently-active assignment (history is preserved, never overwritten).
+    prior = await db.bus_assignments.find_one({"student_id": sid, "status": "active"}, {"_id": 0})
     await db.bus_assignments.update_many(
         {"student_id": sid, "status": "active"},
         {"$set": {"status": "inactive", "effective_to": effective_from}},
@@ -306,11 +488,19 @@ async def assign_bus_stop(sid: str, body: Dict[str, Any], user = Depends(require
     doc = {
         "id": gen_id(), "student_id": sid,
         "stop_no": stop["stop_no"], "main_area": stop.get("main_area", ""), "stop_name": stop.get("stop_name", ""),
-        "monthly_fee": stop.get("monthly_fee", 0), "academic_year": stop.get("academic_year", academic_year),
+        "monthly_fee": effective_fee, "academic_year": stop.get("academic_year", academic_year),
         "effective_from": effective_from, "effective_to": None, "status": "active",
         "created_at": now_iso(), "created_by": user["name"],
     }
     await db.bus_assignments.insert_one(doc)
+    if fee_override is not None:
+        await audit(user, "individual_fee_update", "bus_assignment", doc["id"], {
+            "student_id": sid, "student_name": student.get("name"), "admission_no": student.get("admission_no"),
+            "main_area": stop.get("main_area"), "stop_name": stop.get("stop_name"), "stop_no": stop["stop_no"],
+            "old_monthly_fee": prior.get("monthly_fee") if prior else stop.get("monthly_fee", 0),
+            "new_monthly_fee": effective_fee, "updated_by": user["name"], "updated_by_id": user["id"],
+            "at": now_iso(), "reason": reason or "",
+        })
     # Denormalized snapshot on the student doc for fast reads (list views, receipts, reports).
     await db.students.update_one({"id": sid}, {"$set": {
         "bus_required": True, "bus_stop_no": stop["stop_no"], "bus_stop_name": stop.get("stop_name", ""),
@@ -462,6 +652,68 @@ async def bus_assignment_template_xlsx(academic_year: str = "2026-27", only_unas
     return Response(content=buf.getvalue(),
                      media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      headers={"Content-Disposition": f'attachment; filename="Bus_Assignment_Template_{academic_year}.xlsx"'})
+
+@router.get("/students/export.csv")
+async def export_students_csv(
+    department_id: Optional[str] = None,
+    academic_year: Optional[str] = None,
+    user = Depends(require_roles("administrator","manager","accountant")),
+):
+    """Student export for receipt-eligibility purposes (Task 7/8). Column
+    order and the Receipt Type column are built using the SAME
+    eligible_receipt_codes_for_class rule the backend enforces at receipt
+    creation (core.py) and the /students/{id}/eligible-receipt-types endpoint
+    use — so this file can never state a different rule than the app itself
+    enforces. Read-only: does not write anything. All values are pulled
+    directly from existing student/class/department records — nothing here
+    is invented or guessed."""
+    import io, csv as _csv
+    classes = {c["id"]: c for c in await db.classes.find({}, {"_id": 0}).to_list(2000)}
+    departments = {d["id"]: d for d in await db.departments.find({}, {"_id": 0}).to_list(50)}
+    receipt_types = await db.receipt_types.find({"enabled": True}, {"_id": 0}).to_list(50)
+
+    sq: Dict[str, Any] = {"status": "active"}
+    if department_id: sq["department_id"] = department_id
+    if academic_year: sq["academic_year"] = academic_year
+    students = await db.students.find(sq, {"_id": 0}).sort("name", 1).to_list(10000)
+
+    buf = io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow([
+        "Admission No.", "Student Name", "Class", "Division", "Medium", "Stream",
+        "Academic Year", "Department", "Bus Facility Status", "Bus Area/Village",
+        "Bus Sub Stop", "Father Name", "Mother Name", "Contact No.",
+        "Eligible Receipt Type(s)", "Primary Receipt Type", "Eligibility Note",
+    ])
+    for s in students:
+        cls = classes.get(s.get("class_id"), {})
+        dept = departments.get(s.get("department_id"), {})
+        specific_codes, notes = eligible_receipt_codes_for_class(cls.get("name"), s.get("medium"), s.get("stream"))
+        dept_code = dept.get("code")
+        codes_for_row = []
+        for t in receipt_types:
+            code = t.get("code")
+            allowed = t.get("applicable_dept_codes") or []
+            if dept_code and allowed and dept_code not in allowed:
+                continue
+            if code == "BUS":
+                if s.get("bus_required"): codes_for_row.append(code)
+            elif code == "DV":
+                continue
+            elif code == "EMJC":
+                codes_for_row.append(code)
+            elif code in specific_codes:
+                codes_for_row.append(code)
+        primary = next((c for c in codes_for_row if c != "EMJC" and c != "BUS"), (codes_for_row[0] if codes_for_row else ""))
+        w.writerow([
+            s.get("admission_no",""), s.get("name",""), cls.get("name",""), s.get("section",""),
+            s.get("medium",""), s.get("stream",""), s.get("academic_year",""), dept.get("name",""),
+            "Yes" if s.get("bus_required") else "No", s.get("bus_main_area") or "", s.get("bus_stop_name") or "",
+            s.get("father_name",""), s.get("mother_name",""), s.get("guardian_mobile",""),
+            "; ".join(codes_for_row), primary, "; ".join(notes),
+        ])
+    return Response(content=buf.getvalue().encode("utf-8-sig"), media_type="text/csv",
+                     headers={"Content-Disposition": 'attachment; filename="FeeHub_Students_Export.csv"'})
 
 @router.get("/bus-assignment-template.csv")
 async def bus_assignment_template_csv(only_unassigned: bool = False,

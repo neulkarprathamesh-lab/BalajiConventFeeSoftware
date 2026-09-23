@@ -27,6 +27,22 @@ export default function StudentDetail() {
   useEffect(() => { load(); }, [id]);
   useEffect(() => { api.get('/bus-stops').then(r => setBusStops(r.data || [])).catch(() => {}); }, []);
 
+  // ---- Payment Receipt History (active 2-session retention; see backend
+  // routers/receipt_archives.py) — a SEPARATE fetch from the ledger above,
+  // reusing the exact same db.receipts records, never recomputed/duplicated.
+  const [history, setHistory] = useState(null);
+  const [historyYear, setHistoryYear] = useState('');
+  const [historyType, setHistoryType] = useState('');
+  const [historyMode, setHistoryMode] = useState('');
+  const loadHistory = () => {
+    const p = new URLSearchParams();
+    if (historyYear) p.set('academic_year', historyYear);
+    if (historyType) p.set('receipt_type', historyType);
+    if (historyMode) p.set('payment_mode', historyMode);
+    api.get(`/students/${id}/receipt-history?${p.toString()}`).then(r => setHistory(r.data)).catch(() => setHistory(null));
+  };
+  useEffect(() => { loadHistory(); /* eslint-disable-next-line */ }, [id, historyYear, historyType, historyMode]);
+
   if (!data) return <div className="p-8 text-sm text-slate-500">Loading…</div>;
   const s = data.student;
 
@@ -99,13 +115,21 @@ export default function StudentDetail() {
       <PageHeader title={s.name} subtitle={`Admission No: ${s.admission_no}`}
         actions={
           <div className="flex gap-2">
-            <button data-testid="sd-new-receipt" onClick={() => nav(`/new-receipt?student=${id}`)} className="h-9 px-3 bg-blue-600 text-white rounded text-sm flex items-center gap-1.5 hover:bg-blue-700"><ReceiptIcon className="w-4 h-4" /> New Receipt</button>
+            <button data-testid="sd-new-receipt" onClick={() => nav(`/new-receipt/entry?student=${id}`)} className="h-9 px-3 bg-blue-600 text-white rounded text-sm flex items-center gap-1.5 hover:bg-blue-700"><ReceiptIcon className="w-4 h-4" /> New Receipt</button>
             <button onClick={() => nav(`/adjustments?student=${id}`)} className="h-9 px-3 border border-slate-300 rounded text-sm flex items-center gap-1.5 hover:bg-slate-100"><FileEdit className="w-4 h-4" /> Adjustment</button>
             <button onClick={() => nav(`/extensions?student=${id}`)} className="h-9 px-3 border border-slate-300 rounded text-sm flex items-center gap-1.5 hover:bg-slate-100"><CalendarClock className="w-4 h-4" /> Extension</button>
           </div>
         }
       />
       <div className="p-6 space-y-6">
+        <div className="bg-white border border-slate-200 rounded px-4 py-2.5 flex flex-wrap gap-x-6 gap-y-1 text-sm" data-testid="student-academic-identity">
+          {s.department_name && <span><span className="text-slate-500">Department:</span> <span className="font-medium">{s.department_name}</span></span>}
+          {s.class_name && <span><span className="text-slate-500">Class:</span> <span className="font-medium">{s.class_name}</span></span>}
+          {s.stream && <span><span className="text-slate-500">Stream:</span> <span className="font-medium">{s.stream}</span></span>}
+          {s.medium && <span><span className="text-slate-500">Medium:</span> <span className="font-medium">{s.medium}</span></span>}
+          {s.section && <span><span className="text-slate-500">Section:</span> <span className="font-medium">{s.section}</span></span>}
+        </div>
+
         <div className="grid grid-cols-5 gap-4">
           <Card label="Total Fees" value={inr(data.fee_structure?.total || 0)} />
           <Card label="Paid" value={inr(data.total_paid)} tone="text-emerald-700" />
@@ -115,6 +139,8 @@ export default function StudentDetail() {
         </div>
 
         <FeeAdjustmentHistoryPanel studentId={id} nav={nav} />
+
+        <FeeInstallmentPanel studentId={id} academicYear={s.academic_year} feeItems={data.fee_items} overrides={data.fee_overrides} canManage={canManageOb} onChanged={load} />
 
         <div className="bg-white border border-slate-200 rounded" data-testid="student-bus-card">
           <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
@@ -236,22 +262,87 @@ export default function StudentDetail() {
           </div>
         )}
 
-        <div className="bg-white border border-slate-200 rounded">
-          <div className="px-4 py-3 border-b border-slate-200"><h3 className="font-heading font-medium">Receipts</h3></div>
+        <div className="bg-white border border-slate-200 rounded" data-testid="payment-receipt-history">
+          <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <h3 className="font-heading font-medium">Payment Receipt History</h3>
+              {history && (
+                <div className="text-[12px] text-slate-500 mt-0.5">
+                  {history.student.name} &middot; <span className="font-mono">{history.student.admission_no}</span>
+                  {history.student.class_name && <> &middot; {history.student.class_name}</>}
+                  {history.student.stream && <> &middot; {history.student.stream}</>}
+                  {history.student.medium && <> &middot; {history.student.medium}</>}
+                  {history.student.section && <> &middot; Sec {history.student.section}</>}
+                </div>
+              )}
+            </div>
+            {history && (
+              <div className="text-right">
+                <div className="text-[11px] uppercase tracking-widest text-slate-500">Total Receipts: <b className="text-slate-800">{history.total_receipts}</b></div>
+                <div className="text-[11px] uppercase tracking-widest text-slate-500">Total Amount Paid: <b className="text-slate-800">{inr(history.total_amount_paid)}</b></div>
+              </div>
+            )}
+          </div>
+          <div className="px-4 py-2 border-b border-slate-100 bg-slate-50 flex flex-wrap gap-2 items-center">
+            <select data-testid="history-year" value={historyYear} onChange={e=>setHistoryYear(e.target.value)} className="h-8 px-2 border border-slate-300 rounded text-[12px] bg-white">
+              <option value="">Academic Year: All</option>
+              {(history?.active_academic_years || []).map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <select data-testid="history-type" value={historyType} onChange={e=>setHistoryType(e.target.value)} className="h-8 px-2 border border-slate-300 rounded text-[12px] bg-white">
+              <option value="">Receipt Type: All</option>
+              <option value="school">School</option>
+              <option value="bus">Bus</option>
+              <option value="misc">Misc</option>
+              <option value="debit_voucher">Debit Voucher</option>
+            </select>
+            <select data-testid="history-mode" value={historyMode} onChange={e=>setHistoryMode(e.target.value)} className="h-8 px-2 border border-slate-300 rounded text-[12px] bg-white">
+              <option value="">Payment Mode: All</option>
+              <option value="cash">Cash</option>
+              <option value="cheque">Cheque</option>
+              <option value="online">Online</option>
+              <option value="upi">UPI</option>
+              <option value="card">Card</option>
+            </select>
+            {history?.archived_years?.length > 0 && (
+              <div className="ml-auto flex items-center gap-1.5 text-[11px] text-slate-500">
+                {history.archived_years.map(a => (
+                  <span key={a.academic_year} className="px-2 py-0.5 rounded bg-slate-200 text-slate-700" title={a.archived ? 'Archived — see Receipt Archives (Admin)' : 'Older session, not yet archived'}>
+                    {a.academic_year} &middot; {a.archived ? 'ARCHIVED' : 'inactive'}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
           <table className="w-full dense-table">
-            <thead><tr className="text-left text-[11px] uppercase tracking-wide text-slate-600"><th>Number</th><th>Type</th><th>Mode</th><th className="text-right">Amount</th><th>Status</th><th>Date</th></tr></thead>
+            <thead><tr className="text-left text-[11px] uppercase tracking-wide text-slate-600">
+              <th>Number</th><th>Date</th><th>Academic Year</th><th>Type</th><th>Fee Head(s)</th><th className="text-right">Amount</th><th>Mode</th><th>Txn ID</th><th>Issued By</th><th>Status</th>
+            </tr></thead>
             <tbody>
-              {data.receipts.length === 0 && <tr><td colSpan="6" className="text-center py-6 text-slate-500">No receipts yet</td></tr>}
-              {data.receipts.map(r => (
-                <tr key={r.id} className="cursor-pointer" onClick={() => nav(`/receipts/${r.id}`)}>
-                  <td className="font-mono text-[12px]">{r.number}</td>
-                  <td className="capitalize text-slate-600">{r.receipt_type?.replace('_',' ')}</td>
-                  <td className="uppercase text-[11px]">{r.payment_mode}</td>
-                  <td className="text-right tabular font-medium">{inr(r.total)}</td>
-                  <td><span className={`text-[11px] px-1.5 py-0.5 rounded ${r.status==='cancelled'?'bg-red-100 text-red-800':'bg-emerald-100 text-emerald-800'}`}>{r.status}</span></td>
-                  <td className="text-[12px] text-slate-500">{new Date(r.created_at).toLocaleString('en-IN')}</td>
-                </tr>
-              ))}
+              {(!history || history.receipts.length === 0) && <tr><td colSpan="10" className="text-center py-6 text-slate-500">No receipts in the active sessions</td></tr>}
+              {history?.receipts.map(r => {
+                const heads = (r.lines || []).map(l => l.fee_head_name).filter(Boolean).join(', ') || r.purpose || '—';
+                return (
+                  <tr key={r.id} className="cursor-pointer" onClick={() => nav(`/receipts/${r.id}`)} data-testid={`history-row-${r.number}`}>
+                    <td className="font-mono text-[12px]">{r.number}</td>
+                    <td className="text-[12px] text-slate-500">{new Date(r.created_at).toLocaleString('en-IN')}</td>
+                    <td className="text-[12px]">{r.academic_year}</td>
+                    <td className="capitalize text-slate-600">{r.receipt_type?.replace('_',' ')}</td>
+                    <td className="text-[12px] max-w-[220px] truncate" title={heads}>{heads}</td>
+                    <td className="text-right tabular font-medium">{inr(r.total)}</td>
+                    <td className="uppercase text-[11px]">{r.payment_mode}</td>
+                    <td className="font-mono text-[11px] text-slate-500">{r.payment_reference || '—'}</td>
+                    <td className="text-[12px] text-slate-500">{r.cashier_name || '—'}</td>
+                    <td>
+                      {r.status === 'cancelled' ? (
+                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-800 font-semibold" title={r.cancel_reason ? `Voided: ${r.cancel_reason}` : 'Voided'}>VOIDED</span>
+                      ) : (
+                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">{r.status}</span>
+                      )}
+                      {r.reprint_count > 0 && <span className="ml-1 text-[10px] text-amber-700">(reprint #{r.reprint_count})</span>}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -273,6 +364,152 @@ const FA_STATUS_LABEL = {
   active: 'Active',
   completed: 'Completed',
 };
+
+// Option A — per-student fee/installment overrides. Purely a data-entry
+// overlay: never creates a receipt, never touches fee_structures (the shared
+// class template stays the default for every other student), and every
+// paid/outstanding/status figure shown here comes straight from the ledger's
+// backend-computed fee_items (derived live from real receipts) — nothing
+// here is a manually-editable "paid" flag.
+function FeeInstallmentPanel({ studentId, academicYear, feeItems, overrides, canManage, onChanged }) {
+  const [editing, setEditing] = useState(null); // null = closed, {} = new, {...override} = edit
+  if (!feeItems) return null;
+
+  const startNew = () => setEditing({ fee_head_name: '', total_amount: '', installments: [{ amount: '', due_date: '' }] });
+
+  const remove = async (ov) => {
+    if (!window.confirm(`Remove the installment override for "${ov.fee_head_name}"? This student will go back to the shared fee structure for this head. No existing receipts are affected.`)) return;
+    try { await api.delete(`/students/${studentId}/fee-overrides/${ov.id}`); toast.success('Override removed'); onChanged(); }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+  };
+
+  return (
+    <div className="bg-white border border-slate-200 rounded" data-testid="student-installment-panel">
+      <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+        <h3 className="font-heading font-medium">Fee Heads / Installments</h3>
+        {canManage && <button onClick={startNew} className="text-[12px] text-blue-700 hover:underline" data-testid="sd-add-installment">+ Add per-student installment plan</button>}
+      </div>
+      <table className="w-full text-[13px]">
+        <thead>
+          <tr className="text-left text-[11px] uppercase tracking-wide text-slate-500 border-b border-slate-100">
+            <th className="px-4 py-2">Fee Head</th>
+            <th className="text-right">Total</th>
+            <th className="text-right">Paid</th>
+            <th className="text-right">Outstanding</th>
+            <th>Due Date</th>
+            <th>Status</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {feeItems.map((it, i) => (
+            <tr key={i} className="border-b border-slate-50">
+              <td className="px-4 py-1.5">{it.fee_head_name}</td>
+              <td className="text-right font-mono">{inr(it.total)}</td>
+              <td className="text-right font-mono text-emerald-700">{inr(it.paid)}</td>
+              <td className="text-right font-mono">{inr(it.outstanding)}</td>
+              <td className="text-slate-500">{it.due_date || '—'}</td>
+              <td>
+                <span className={`text-[11px] px-2 py-0.5 rounded-full ${it.status === 'paid' ? 'bg-emerald-100 text-emerald-800' : it.status === 'partial' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
+                  {it.status}
+                </span>
+              </td>
+              <td className="text-slate-400 text-[11px]">{it.source === 'override' ? 'per-student' : 'shared'}</td>
+            </tr>
+          ))}
+          {feeItems.length === 0 && <tr><td colSpan={7} className="py-4 text-center text-slate-500">Nothing outstanding.</td></tr>}
+        </tbody>
+      </table>
+      {overrides?.length > 0 && canManage && (
+        <div className="px-4 py-2 border-t border-slate-100 flex flex-wrap gap-2">
+          {overrides.map(ov => (
+            <button key={ov.id} onClick={() => remove(ov)} className="text-[11px] text-red-600 hover:underline">
+              Remove override: {ov.fee_head_name}
+            </button>
+          ))}
+        </div>
+      )}
+      {editing && (
+        <InstallmentEditor
+          studentId={studentId} academicYear={academicYear} initial={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); onChanged(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function InstallmentEditor({ studentId, academicYear, initial, onClose, onSaved }) {
+  const [feeHeadName, setFeeHeadName] = useState(initial.fee_head_name || '');
+  const [totalAmount, setTotalAmount] = useState(initial.total_amount || '');
+  const [rows, setRows] = useState(initial.installments?.length ? initial.installments : [{ amount: '', due_date: '' }]);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const setRow = (i, field, val) => setRows(prev => prev.map((r, ix) => ix === i ? { ...r, [field]: val } : r));
+  const addRow = () => rows.length < 4 && setRows(prev => [...prev, { amount: '', due_date: '' }]);
+  const removeRow = (i) => setRows(prev => prev.filter((_, ix) => ix !== i));
+  const rowsTotal = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+
+  const save = async () => {
+    if (!feeHeadName.trim()) return toast.error('Fee head name is required');
+    if (!totalAmount || Number(totalAmount) <= 0) return toast.error('Total amount must be positive');
+    const useInstallments = rows.length > 1 || rows[0].amount || rows[0].due_date;
+    setBusy(true);
+    try {
+      await api.post(`/students/${studentId}/fee-overrides`, {
+        fee_head_name: feeHeadName.trim(),
+        academic_year: academicYear,
+        total_amount: Number(totalAmount),
+        installments: useInstallments ? rows.map(r => ({ amount: Number(r.amount), due_date: r.due_date })) : [],
+        reason: reason || undefined,
+      });
+      toast.success('Saved');
+      onSaved();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="p-4 border-t border-slate-200 bg-slate-50" data-testid="sd-installment-editor">
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <label className="block">
+          <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Fee Head</div>
+          <input data-testid="ie-fee-head" value={feeHeadName} onChange={e => setFeeHeadName(e.target.value)} placeholder="e.g. Tuition Fee"
+            className="w-full h-9 px-2 border border-slate-300 rounded text-sm bg-white" />
+        </label>
+        <label className="block">
+          <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Total Amount (₹)</div>
+          <input data-testid="ie-total" type="number" min="0" value={totalAmount} onChange={e => setTotalAmount(e.target.value)}
+            className="w-full h-9 px-2 border border-slate-300 rounded text-sm bg-white" />
+        </label>
+      </div>
+      <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Installments (1–4, must total the amount above)</div>
+      {rows.map((r, i) => (
+        <div key={i} className="flex items-center gap-2 mb-1.5">
+          <input data-testid={`ie-inst-amt-${i}`} type="number" min="0" placeholder="Amount" value={r.amount} onChange={e => setRow(i, 'amount', e.target.value)}
+            className="h-9 w-32 px-2 border border-slate-300 rounded text-sm bg-white" />
+          <input data-testid={`ie-inst-due-${i}`} type="date" value={r.due_date} onChange={e => setRow(i, 'due_date', e.target.value)}
+            className="h-9 px-2 border border-slate-300 rounded text-sm bg-white" />
+          {rows.length > 1 && <button onClick={() => removeRow(i)} className="text-[11px] text-red-600 hover:underline">Remove</button>}
+        </div>
+      ))}
+      <div className="flex items-center gap-3 mb-3">
+        {rows.length < 4 && <button onClick={addRow} className="text-[12px] text-blue-700 hover:underline">+ Add installment</button>}
+        <span className={`text-[12px] ${Math.abs(rowsTotal - Number(totalAmount || 0)) > 0.01 ? 'text-red-600' : 'text-emerald-700'}`}>
+          Installments total: {inr(rowsTotal)} {totalAmount ? `/ ${inr(Number(totalAmount))}` : ''}
+        </span>
+      </div>
+      <input data-testid="ie-reason" value={reason} onChange={e => setReason(e.target.value)} placeholder="Reason (optional, for audit)"
+        className="w-full h-9 px-2 border border-slate-300 rounded text-sm bg-white mb-3" />
+      <div className="flex gap-2">
+        <button onClick={save} disabled={busy} data-testid="ie-save" className="h-9 px-4 bg-blue-600 text-white rounded text-sm disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
+        <button onClick={onClose} className="h-9 px-4 border border-slate-300 rounded text-sm">Cancel</button>
+      </div>
+    </div>
+  );
+}
 
 function FeeAdjustmentHistoryPanel({ studentId, nav }) {
   const [apps, setApps] = useState(null);

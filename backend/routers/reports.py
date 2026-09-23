@@ -1,6 +1,6 @@
 """Dashboard, reports (collection, audit, cancellations, concessions, defaulters, day-end),
 bus routes, outstanding notices, quarterly reminders trigger, public lookups (no-auth)."""
-import os, hmac, asyncio
+import os, hmac, asyncio, re
 from datetime import datetime, timezone, date, timedelta
 from typing import Any, Dict, List, Optional, Literal
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -16,7 +16,9 @@ router = APIRouter(prefix="/api", tags=["reports"])
 async def dashboard(user = Depends(get_current_user)):
     today = date.today().isoformat()
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    receipts_today = await db.receipts.find({"created_at":{"$gte": today}, "status":{"$ne":"cancelled"}}, {"_id":0}).to_list(2000)
+    today_bound = {"$gte": today, "$lt": tomorrow}  # same boundary used everywhere below - Today's
+    # Collection, Receipts Today, and Recent Receipts must never disagree about what "today" means.
+    receipts_today = await db.receipts.find({"created_at": today_bound, "status":{"$ne":"cancelled"}}, {"_id":0}).to_list(2000)
     collection_today = sum(r.get("total",0) for r in receipts_today if r.get("receipt_type") not in ("refund","debit_voucher"))
     pending_adj = await db.adjustments.count_documents({"status":"pending"})
     pending_ext = await db.extensions.count_documents({"status":"pending"})
@@ -24,7 +26,11 @@ async def dashboard(user = Depends(get_current_user)):
     due_today = sum(1 for r in reminders if (r.get("due_date") or "")[:10] == today)
     due_tomorrow = sum(1 for r in reminders if (r.get("due_date") or "")[:10] == tomorrow)
     overdue = sum(1 for r in reminders if (r.get("due_date") or "")[:10] < today)
-    recent = await db.receipts.find({}, {"_id":0}).sort("created_at",-1).limit(10).to_list(10)
+    # Recent Receipts - previously had NO date filter at all (just newest-10 overall), which
+    # silently backfilled with older days' receipts whenever today had fewer than 10. Now
+    # scoped to the exact same today_bound as Today's Collection/Receipts Today above, so an
+    # older receipt can never appear here regardless of how many receipts exist today.
+    recent = await db.receipts.find({"created_at": today_bound}, {"_id":0}).sort("created_at",-1).limit(20).to_list(20)
     dept_totals: Dict[str,float] = {}
     for r in receipts_today:
         if r.get("receipt_type") in ("refund","debit_voucher"): continue
@@ -41,18 +47,49 @@ async def dashboard(user = Depends(get_current_user)):
     }
 
 # ---------- Reports ----------
+@router.get("/reports/collection/cashiers")
+async def collection_report_cashiers(user = Depends(get_current_user)):
+    """Dynamically derives the 'Issued/Printed By' filter list from who has
+    actually issued a receipt - never a hard-coded name list, so a new
+    cashier/admin appears automatically and nobody has to remember to add
+    them anywhere."""
+    pipeline = [
+        {"$match": {"cashier_id": {"$ne": None}}},
+        {"$group": {"_id": "$cashier_id", "name": {"$last": "$cashier_name"}}},
+        {"$sort": {"name": 1}},
+    ]
+    rows = await db.receipts.aggregate(pipeline).to_list(200)
+    return [{"cashier_id": r["_id"], "cashier_name": r["name"]} for r in rows if r["_id"]]
+
+
 @router.get("/reports/collection")
 async def collection_report(
     date_from: Optional[str] = None, date_to: Optional[str] = None,
     department_id: Optional[str] = None, cashier_id: Optional[str] = None,
+    receipt_type_id: Optional[str] = None, format: str = "json",
     user = Depends(get_current_user),
 ):
+    """`receipt_type_id` filters by the receipt TEMPLATE actually used (EP/MP/
+    EMP/SEC/JC/JCACS/BUS/EMJC/DV, from the receipt_types collection) — distinct
+    from `receipt_type` (the business-rule field: school/bus/refund/etc, still
+    shown unchanged in `by_type` below). `cashier_id` filters by the receipt's
+    OWN `cashier_id` - the user who actually issued/printed it at creation
+    time, which a later reprint (see receipts.py's /reprint) never changes.
+    It is applied to the SAME base query every downstream figure
+    (gross/refunds/vouchers/net/by_mode/by_type/rows/count) is computed from,
+    so the whole report — not just the transaction table — reflects the
+    filter."""
     today = date.today().isoformat()
     if not date_from: date_from = today
     if not date_to: date_to = today
     q: Dict[str, Any] = {"created_at":{"$gte": date_from, "$lte": date_to + "T23:59:59"}, "status":{"$ne":"cancelled"}}
     if department_id: q["department_id"] = department_id
     if cashier_id: q["cashier_id"] = cashier_id
+    receipt_type_label = "All Receipt Types"
+    if receipt_type_id:
+        q["receipt_type_id"] = receipt_type_id
+        rt = await db.receipt_types.find_one({"id": receipt_type_id}, {"_id": 0, "code": 1, "name": 1})
+        receipt_type_label = f"{rt['code']} — {rt['name']}" if rt else "Unknown Receipt Type"
     rows = await db.receipts.find(q, {"_id":0}).sort("created_at",1).to_list(5000)
     total = sum(r.get("total",0) for r in rows if r.get("receipt_type") not in ("refund","debit_voucher"))
     refund = sum(r.get("total",0) for r in rows if r.get("receipt_type") == "refund")
@@ -62,8 +99,96 @@ async def collection_report(
         if r.get("receipt_type") in ("refund","debit_voucher"): continue
         by_mode[r.get("payment_mode","-")] = by_mode.get(r.get("payment_mode","-"),0) + r.get("total",0)
         by_type[r.get("receipt_type","-")] = by_type.get(r.get("receipt_type","-"),0) + r.get("total",0)
-    return {"rows": rows, "gross_collection": total, "refunds": refund, "vouchers": vouchers,
-            "net": total - refund - vouchers, "by_mode": by_mode, "by_type": by_type, "count": len(rows)}
+    net = total - refund - vouchers
+    cashier_label = "All"
+    if cashier_id:
+        first_hit = next((r for r in rows if r.get("cashier_id") == cashier_id), None)
+        cashier_label = first_hit["cashier_name"] if first_hit else (await db.receipts.find_one({"cashier_id": cashier_id}, {"cashier_name": 1}) or {}).get("cashier_name", cashier_id)
+
+    if format == "json":
+        return {"rows": rows, "gross_collection": total, "refunds": refund, "vouchers": vouchers,
+                "net": net, "by_mode": by_mode, "by_type": by_type, "count": len(rows),
+                "receipt_type_id": receipt_type_id, "receipt_type_label": receipt_type_label,
+                "cashier_id": cashier_id, "cashier_label": cashier_label}
+
+    school = await get_settings_doc()
+    period = f"{date_from} to {date_to}"
+    subtitle = f"Period: {period} | Receipt Type: {receipt_type_label} | Issued/Printed By: {cashier_label}"
+
+    if format == "xlsx":
+        import io, openpyxl
+        from openpyxl.styles import Font, PatternFill
+        from fastapi import Response
+        wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Collection Report"
+        ws.append([(school.get("school_name") or "BALAJI CONVENT").upper()])
+        ws.append(["COLLECTION REPORT"])
+        ws.append([subtitle])
+        ws.append([])
+        header_row = ws.max_row + 1
+        ws.append(["S.No", "Receipt No.", "Type", "Payer", "Department", "Mode", "Amount", "Issued/Printed By"])
+        for cell in ws[header_row]:
+            cell.font = Font(bold=True, color="FFFFFF"); cell.fill = PatternFill("solid", fgColor="1E293B")
+        for i, r in enumerate(rows, 1):
+            ws.append([i, r.get("number"), (r.get("receipt_type") or "").replace("_", " "), r.get("payer_name"),
+                       r.get("department_code"), (r.get("payment_mode") or "").upper(), r.get("total", 0), r.get("cashier_name")])
+        ws.append([])
+        ws.append(["", "", "", "", "", "Gross Collection", total])
+        ws.append(["", "", "", "", "", "Refunds", refund])
+        ws.append(["", "", "", "", "", "Vouchers Out", vouchers])
+        ws.append(["", "", "", "", "", "NET", net])
+        for row in ws.iter_rows(min_row=ws.max_row - 3, max_row=ws.max_row):
+            for cell in row: cell.font = Font(bold=True)
+        for idx, w in enumerate([6, 16, 14, 22, 12, 10, 14, 20], start=1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(idx)].width = w
+        buf = io.BytesIO(); wb.save(buf)
+        return Response(content=buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         headers={"Content-Disposition": f'attachment; filename="Collection_Report_{date_from}_{date_to}.xlsx"'})
+
+    if format == "pdf":
+        import io, html as _html
+        from xhtml2pdf import pisa
+        from fastapi import Response
+        trs = "".join(
+            f"<tr><td>{i}</td><td>{_html.escape(r.get('number') or '')}</td><td>{_html.escape((r.get('receipt_type') or '').replace('_',' '))}</td>"
+            f"<td>{_html.escape(r.get('payer_name') or '')}</td><td>{_html.escape(r.get('department_code') or '')}</td>"
+            f"<td>{_html.escape((r.get('payment_mode') or '').upper())}</td><td class='r'>{r.get('total',0):,.2f}</td>"
+            f"<td>{_html.escape(r.get('cashier_name') or '')}</td></tr>"
+            for i, r in enumerate(rows, 1)
+        ) or "<tr><td colspan='8' style='text-align:center;color:#888;'>No transactions for this filter.</td></tr>"
+        html_str = f"""<html><head><style>
+          @page {{ size: A4 landscape; margin: 12mm; }}
+          body {{ font-family: Helvetica, Arial, sans-serif; font-size: 9px; }}
+          h1 {{ font-size: 14px; text-align:center; margin: 0; }}
+          h2 {{ font-size: 11px; text-align:center; margin: 3px 0; color:#444; font-weight:normal; }}
+          table {{ width:100%; border-collapse: collapse; margin-top: 8px; }}
+          th {{ background:#1e293b; color:#fff; border: 1px solid #999; padding: 3px 4px; text-align:left; }}
+          td {{ border: 1px solid #ccc; padding: 3px 4px; word-break: break-word; }}
+          td.r, th.r {{ text-align:right; font-family: monospace; }}
+          tr.total td {{ font-weight: bold; border-top: 1.5px solid #333; background:#f7f7f7; }}
+          col.c-sno {{ width: 5%; }} col.c-no {{ width: 14%; }} col.c-type {{ width: 10%; }}
+          col.c-payer {{ width: 22%; }} col.c-dept {{ width: 8%; }} col.c-mode {{ width: 9%; }}
+          col.c-amt {{ width: 14%; }} col.c-by {{ width: 18%; }}
+        </style></head><body>
+          <h1>{_html.escape((school.get('school_name') or 'BALAJI CONVENT').upper())}</h1>
+          <h2>Collection Report &mdash; {_html.escape(subtitle)}</h2>
+          <table>
+            <colgroup><col class="c-sno"/><col class="c-no"/><col class="c-type"/><col class="c-payer"/><col class="c-dept"/><col class="c-mode"/><col class="c-amt"/><col class="c-by"/></colgroup>
+            <thead><tr><th>S.No</th><th>Receipt No.</th><th>Type</th><th>Payer</th><th>Dept</th><th>Mode</th><th class="r">Amount</th><th>Issued/Printed By</th></tr></thead>
+            <tbody>{trs}</tbody>
+          </table>
+          <table style="margin-top:6px;">
+            <colgroup><col style="width:70%"/><col style="width:30%"/></colgroup>
+            <tr><td>Gross Collection</td><td class="r">{total:,.2f}</td></tr>
+            <tr><td>Refunds</td><td class="r">{refund:,.2f}</td></tr>
+            <tr><td>Vouchers Out</td><td class="r">{vouchers:,.2f}</td></tr>
+            <tr class="total"><td>NET</td><td class="r">{net:,.2f}</td></tr>
+          </table>
+        </body></html>"""
+        buf = io.BytesIO(); pisa.CreatePDF(html_str, dest=buf)
+        return Response(content=buf.getvalue(), media_type="application/pdf",
+                         headers={"Content-Disposition": f'inline; filename="Collection_Report_{date_from}_{date_to}.pdf"'})
+
+    raise HTTPException(400, f"Unknown format '{format}' - use json, csv or xlsx")
 
 @router.get("/reports/audit")
 async def audit_report(limit: int = 500, user = Depends(require_roles("administrator","manager","accountant"))):
@@ -86,8 +211,11 @@ async def cancellation_report(
 async def concession_ledger(
     date_from: Optional[str] = None, date_to: Optional[str] = None,
     department_id: Optional[str] = None,
+    format: str = "json",
     user = Depends(require_roles("administrator","manager","accountant")),
 ):
+    """format=json|csv|xlsx|pdf — export always reflects the SAME filtered rows the
+    Concession Ledger screen shows (same date_from/date_to/department_id query)."""
     today = date.today().isoformat()
     if not date_from: date_from = today[:7] + "-01"
     if not date_to: date_to = today
@@ -106,7 +234,82 @@ async def concession_ledger(
         by_type[t] = by_type.get(t, 0) + r.get("amount", 0)
         m = (r.get("approved_at") or "")[:7]
         by_month[m] = by_month.get(m, 0) + r.get("amount", 0)
-    return {"rows": rows, "count": len(rows), "total": total, "by_type": by_type, "by_month": by_month}
+
+    if format == "json":
+        return {"rows": rows, "count": len(rows), "total": total, "by_type": by_type, "by_month": by_month}
+
+    def _fmt_row(i, r):
+        s = r.get("student") or {}
+        return [
+            i, s.get("name","-"), s.get("admission_no","-"),
+            (r.get("adjustment_type","-") or "-").replace("_"," "),
+            r.get("reason",""), r.get("amount",0), r.get("approved_by_name",""),
+            (r.get("approved_at") or "")[:10],
+        ]
+    headers = ["#","Student","Adm No","Type","Reason","Amount","Approved By","Date"]
+
+    if format == "csv":
+        import io, csv as _csv
+        from fastapi import Response
+        buf = io.StringIO()
+        w = _csv.writer(buf)
+        w.writerow(headers)
+        for i, r in enumerate(rows, 1):
+            w.writerow(_fmt_row(i, r))
+        return Response(content=buf.getvalue().encode("utf-8-sig"), media_type="text/csv",
+                         headers={"Content-Disposition": f'attachment; filename="Concession_Ledger_{date_from}_to_{date_to}.csv"'})
+
+    if format == "xlsx":
+        import io, openpyxl
+        from openpyxl.styles import Font, PatternFill
+        from fastapi import Response
+        wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Concession Ledger"
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF"); cell.fill = PatternFill("solid", fgColor="1E293B")
+        for i, r in enumerate(rows, 1):
+            ws.append(_fmt_row(i, r))
+        for idx, w in enumerate([5,22,14,16,34,12,20,12], start=1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(idx)].width = w
+        buf = io.BytesIO(); wb.save(buf)
+        return Response(content=buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         headers={"Content-Disposition": f'attachment; filename="Concession_Ledger_{date_from}_to_{date_to}.xlsx"'})
+
+    if format == "pdf":
+        import io, html as _html
+        from xhtml2pdf import pisa
+        from fastapi import Response
+        trs = "".join(
+            f"<tr><td>{i}</td><td>{_html.escape((r.get('student') or {}).get('name','-'))}</td>"
+            f"<td>{_html.escape((r.get('student') or {}).get('admission_no','-'))}</td>"
+            f"<td>{_html.escape((r.get('adjustment_type','-') or '-').replace('_',' '))}</td>"
+            f"<td>{_html.escape(r.get('reason','') or '')}</td>"
+            f"<td class='r'>Rs. {r.get('amount',0):,.2f}</td>"
+            f"<td>{_html.escape(r.get('approved_by_name','') or '')}</td>"
+            f"<td>{_html.escape((r.get('approved_at') or '')[:10])}</td></tr>"
+            for i, r in enumerate(rows, 1)
+        )
+        html_str = f"""<html><head><style>
+          @page {{ size: A4 landscape; margin: 10mm; }}
+          body {{ font-family: Helvetica, Arial, sans-serif; font-size: 9px; }}
+          h1 {{ font-size: 16px; text-align:center; margin: 0; }}
+          .sub {{ text-align:center; font-size: 10px; color:#444; margin: 2px 0 10px; }}
+          table {{ width: 100%; border-collapse: collapse; }}
+          th {{ background:#1E293B; color:#fff; padding:4px; text-align:left; font-size: 9px; }}
+          td {{ padding:3px 4px; border-bottom:0.5px solid #ccc; }}
+          td.r {{ text-align:right; }}
+        </style></head><body>
+        <h1>BALAJI CONVENT &amp; JUNIOR COLLEGE</h1>
+        <div class="sub">Concession &amp; Adjustment Ledger &middot; {date_from} &rarr; {date_to} &middot; {len(rows)} records &middot; Total Rs. {total:,.2f}</div>
+        <table>
+        <thead><tr><th>#</th><th>Student</th><th>Adm No</th><th>Type</th><th>Reason</th><th>Amount</th><th>Approved By</th><th>Date</th></tr></thead>
+        <tbody>{trs}</tbody></table></body></html>"""
+        buf = io.BytesIO()
+        pisa.CreatePDF(html_str, dest=buf)
+        return Response(content=buf.getvalue(), media_type="application/pdf",
+                         headers={"Content-Disposition": f'inline; filename="Concession_Ledger_{date_from}_to_{date_to}.pdf"'})
+
+    raise HTTPException(400, f"Unknown format '{format}' - use json, csv, xlsx, or pdf")
 
 @router.get("/reports/defaulters")
 async def defaulters_report(
@@ -235,6 +438,39 @@ async def list_bus_stops(user = Depends(get_current_user)):
     """Master list of every bus stop the school picks up from — one row per receipt-visible stop."""
     return await db.bus_stops.find({}, {"_id":0}).sort("stop_no", 1).to_list(500)
 
+
+@router.get("/bus-fee-update/hierarchy")
+async def bus_fee_update_hierarchy(academic_year: str = "2026-27", user = Depends(get_current_user)):
+    """Main Area -> Sub Stop -> active students, with each student's CURRENT
+    effective monthly fee (their own active bus_assignments row if one
+    exists, else the stop's standard rate) - for the Live Bus Fee Update
+    screen (Phase 5). Read-only; 'Updated Monthly Fee' stays blank until the
+    admin explicitly submits a change via PATCH /bus-stops/{id} (stop-wide)
+    or POST /students/{id}/bus-assignment with monthly_fee_override (individual)."""
+    stops = await db.bus_stops.find({"academic_year": academic_year, "active": {"$ne": False}}, {"_id": 0}).sort("stop_no", 1).to_list(500)
+    students = await db.students.find({"status": "active", "bus_required": True}, {"_id": 0}).to_list(5000)
+    classes = {c["id"]: c for c in await db.classes.find({}, {"_id": 0}).to_list(2000)}
+    by_stop_no: Dict[int, list] = {}
+    for s in students:
+        by_stop_no.setdefault(s.get("bus_stop_no"), []).append(s)
+
+    areas: Dict[str, list] = {}
+    for stop in stops:
+        assigned = by_stop_no.get(stop["stop_no"], [])
+        stop_students = []
+        for s in assigned:
+            assignment = await db.bus_assignments.find_one({"student_id": s["id"], "status": "active"}, {"_id": 0})
+            current_fee = assignment.get("monthly_fee") if assignment else stop.get("monthly_fee")
+            cls = classes.get(s.get("class_id"), {})
+            stop_students.append({
+                "student_id": s["id"], "admission_no": s.get("admission_no"), "student_name": s.get("name"),
+                "class_name": cls.get("name"), "medium": s.get("medium"), "current_monthly_fee": current_fee,
+            })
+        areas.setdefault(stop.get("main_area") or "—", []).append({
+            "stop_id": stop["id"], "stop_no": stop["stop_no"], "stop_name": stop.get("stop_name"),
+            "monthly_fee": stop.get("monthly_fee"), "active_student_count": len(stop_students), "students": stop_students,
+        })
+    return [{"main_area": area, "stops": stops_list} for area, stops_list in sorted(areas.items())]
 
 @router.post("/bus-stops/bulk-update")
 async def bulk_update_bus_fares(body: Dict[str, Any], user = Depends(require_roles("administrator","manager"))):
@@ -372,7 +608,20 @@ async def update_bus_stop(sid: str, body: Dict[str, Any], user = Depends(require
     r = await db.bus_stops.update_one({"id": sid}, {"$set": allowed})
     if r.matched_count == 0:
         raise HTTPException(404, "Bus stop not found")
-    await audit(user, "update", "bus_stop", sid, allowed)
+    if "monthly_fee" in allowed:
+        # Richer audit specifically for a fee change (Phase 7/8) - old/new fee
+        # and how many currently-active students at this exact stop are
+        # affected going forward. Historical bus_charges rows already store
+        # their own amount and are never touched by this.
+        affected = await db.students.count_documents({"bus_stop_no": current.get("stop_no"), "status": "active", "bus_required": True})
+        await audit(user, "fee_update", "bus_stop", sid, {
+            "main_area": current.get("main_area"), "stop_name": current.get("stop_name"), "stop_no": current.get("stop_no"),
+            "old_monthly_fee": current.get("monthly_fee"), "new_monthly_fee": allowed["monthly_fee"],
+            "affected_student_count": affected, "updated_by": user["name"], "updated_by_id": user["id"],
+            "at": now_iso(), "reason": body.get("reason") or "",
+        })
+    else:
+        await audit(user, "update", "bus_stop", sid, allowed)
     return {"ok": True}
 
 @router.delete("/bus-stops/{sid}")
@@ -483,8 +732,10 @@ async def bus_report_detailed(
     if class_id: q["class_id"] = class_id
     if medium: q["medium"] = medium
     if academic_year: q["academic_year"] = academic_year
-    if admission_no: q["admission_no"] = {"$regex": admission_no, "$options": "i"}
-    if student: q["name"] = {"$regex": student, "$options": "i"}
+    # re.escape - see students.py's list_students() for the same fix and rationale:
+    # literal search text, never executable regex syntax.
+    if admission_no: q["admission_no"] = {"$regex": re.escape(admission_no), "$options": "i"}
+    if student: q["name"] = {"$regex": re.escape(student), "$options": "i"}
     if bus_status == "active": q["bus_required"] = True
     elif bus_status == "inactive": q["bus_required"] = {"$ne": True}
     if main_stop: q["bus_main_area"] = main_stop
@@ -658,10 +909,6 @@ async def outstanding_notices(
     class_map = {c["id"]: c for c in await db.classes.find({}, {"_id":0}).to_list(500)}
     fs_ids = list({s.get("fee_structure_id") for s in students if s.get("fee_structure_id")})
     fs_map = {f["id"]: f for f in await db.fee_structures.find({"id":{"$in": fs_ids}}, {"_id":0}).to_list(500)} if fs_ids else {}
-    routes = await db.bus_routes.find({}, {"_id":0}).to_list(200)
-    route_map = {r["code"]: r for r in routes}
-    settings = await get_settings_doc()
-    bus_months = int(settings.get("bus_annual_months", 12) or 12)
     sids = [s["id"] for s in students]
     receipts = await db.receipts.find({"student_id":{"$in": sids}, "status":{"$ne":"cancelled"}}, {"_id":0}).to_list(20000)
     adjs = await db.adjustments.find({"student_id":{"$in": sids}, "status":"approved"}, {"_id":0}).to_list(5000)
@@ -669,7 +916,9 @@ async def outstanding_notices(
     for r in receipts:
         if r.get("receipt_type") in ("refund",):
             refund_by[r["student_id"]] = refund_by.get(r["student_id"],0) + r.get("total",0)
-        elif r.get("receipt_type") in ("school","admission","bus","misc","department","general_money","general_collection"):
+        # "bus" receipts are excluded here: bus fee is tracked separately via
+        # bus_charges/BusFees, not folded into this academic-fee outstanding total.
+        elif r.get("receipt_type") in ("school","admission","misc","department","general_money","general_collection"):
             paid_by[r["student_id"]] = paid_by.get(r["student_id"],0) + r.get("total",0)
     for a in adjs:
         adj_by[a["student_id"]] = adj_by.get(a["student_id"],0) + a.get("amount",0)
@@ -677,9 +926,7 @@ async def outstanding_notices(
     for s in students:
         fs = fs_map.get(s.get("fee_structure_id"))
         academic_fee = fs.get("total", 0) if fs else 0
-        bus_route = route_map.get(s.get("bus_route")) if s.get("bus_route") else None
-        bus_fee_annual = float(bus_route.get("monthly_fee", 0)) * bus_months if bus_route else 0
-        total_fee = academic_fee + bus_fee_annual
+        total_fee = academic_fee
         paid = paid_by.get(s["id"], 0); refund = refund_by.get(s["id"], 0); adjusted = adj_by.get(s["id"], 0)
         outstanding = max(0, total_fee - paid - adjusted + refund)
         if outstanding < min_amount: continue
@@ -690,11 +937,6 @@ async def outstanding_notices(
             "class_name": class_map.get(s["class_id"],{}).get("name"),
             "academic_year": dept_map.get(s["department_id"],{}).get("academic_year"),
             "total_fee": total_fee, "academic_fee": academic_fee,
-            "bus_route_code": s.get("bus_route") if bus_route else None,
-            "bus_route_name": bus_route.get("name") if bus_route else None,
-            "bus_monthly_fee": bus_route.get("monthly_fee") if bus_route else 0,
-            "bus_months": bus_months if bus_route else 0,
-            "bus_fee_annual": bus_fee_annual,
             "paid": paid, "adjusted": adjusted, "refunded": refund,
             "outstanding": outstanding,
             "items": fs.get("items", []) if fs else [],
@@ -739,7 +981,18 @@ async def public_student_lookup(admission_no: str):
         fs = None
         if stu.get("fee_structure_id"):
             fs = await db.fee_structures.find_one({"id": stu["fee_structure_id"]}, {"_id": 0})
-        paid = sum(x.get("total", 0) for x in receipts if x.get("receipt_type") not in ("refund","debit_voucher"))
+        # school fee only — total_fee here is fs.total (school fee structure),
+        # so a Bus receipt's total must not count as "paid" against it, or the
+        # displayed outstanding drops by the bus amount with no school fee paid.
+        paid = sum(x.get("total", 0) for x in receipts if x.get("receipt_type") not in ("refund","debit_voucher","bus"))
+        # Same opening-paid carry-forward as /students/{id}/ledger — a real
+        # pre-go-live payment imported into fee_details, never a fake receipt —
+        # so a parent checking their own balance here sees the same figure
+        # staff see on the Fee Update screen, not a stale ₹0.
+        fd = await db.fee_details.find_one(
+            {"student_id": stu["id"], "academic_year": stu.get("academic_year") or "2026-27"}, {"_id": 0}
+        )
+        paid += float(fd.get("total_paid") or 0) if fd else 0
         refunded = sum(x.get("total", 0) for x in receipts if x.get("receipt_type") == "refund")
         adjustments = await db.adjustments.find({"student_id": stu["id"], "status": "approved"}, {"_id": 0}).to_list(100)
         adjusted = sum(a.get("amount", 0) for a in adjustments)
@@ -783,7 +1036,12 @@ async def public_lookup(number: str):
             fs = None
             if s.get("fee_structure_id"):
                 fs = await db.fee_structures.find_one({"id": s["fee_structure_id"]}, {"_id": 0})
-            paid = sum(x.get("total", 0) for x in receipts if x.get("receipt_type") not in ("refund","debit_voucher"))
+            # school fee only + opening-paid carry-forward — see same fix/comment in public_student_lookup above.
+            paid = sum(x.get("total", 0) for x in receipts if x.get("receipt_type") not in ("refund","debit_voucher","bus"))
+            fd = await db.fee_details.find_one(
+                {"student_id": s["id"], "academic_year": s.get("academic_year") or "2026-27"}, {"_id": 0}
+            )
+            paid += float(fd.get("total_paid") or 0) if fd else 0
             refunded = sum(x.get("total", 0) for x in receipts if x.get("receipt_type") == "refund")
             adjustments = await db.adjustments.find({"student_id": s["id"], "status": "approved"}, {"_id": 0}).to_list(100)
             adjusted = sum(a.get("amount", 0) for a in adjustments)
@@ -795,3 +1053,220 @@ async def public_lookup(number: str):
                 "receipts_count": len(receipts),
             }
     return payload
+
+# ---------- Student Fee Balance Report ----------
+@router.get("/reports/student-fee-balance")
+async def student_fee_balance_report(
+    academic_year: str = "2026-27",
+    class_id: Optional[str] = None,
+    section: Optional[str] = None,
+    medium: Optional[str] = None,
+    stream: Optional[str] = None,
+    format: str = "json",
+    user = Depends(get_current_user),
+):
+    """Student-wise SCHOOL fee pending for a class/group, reusing the exact
+    same computation the Live Fee Update grid already uses and trusts
+    (fee_update_students -> compute_fee_items/apply_opening_paid) - never a
+    second, independently-derived total that could drift from it. Bus Fee is
+    intentionally excluded here (tracked separately everywhere else in this
+    app to avoid the double-counting this software's very first fix in this
+    engagement addressed), matching "overall_balance" on Live Fee Update."""
+    from routers.fee_details import fee_update_students
+    rows = await fee_update_students(academic_year, class_id, section, medium, stream, None, "", user)
+    students = [
+        {"admission_no": r["admission_no"], "student_name": r["student_name"],
+         "class_name": r["class_name"], "medium": r["medium"], "stream": r.get("stream"),
+         "pending": round(r.get("overall_balance", 0), 2)}
+        for r in rows if round(r.get("overall_balance", 0), 2) > 0
+    ]
+    students.sort(key=lambda r: r["student_name"] or "")
+    total = round(sum(s["pending"] for s in students), 2)
+
+    class_doc = await db.classes.find_one({"id": class_id}, {"_id": 0}) if class_id else None
+    group_label = class_doc.get("name") if class_doc else "All Classes"
+    if medium: group_label += f" · {medium}"
+    if stream: group_label += f" · {stream}"
+    if section: group_label += f" · Sec {section}"
+
+    if format == "json":
+        return {"group": group_label, "academic_year": academic_year, "rows": students, "total": total, "count": len(students)}
+
+    school = await get_settings_doc()
+
+    if format == "xlsx":
+        import io, openpyxl
+        from openpyxl.styles import Font, PatternFill
+        from fastapi import Response
+        wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Fee Balance"
+        ws.append([(school.get("school_name") or "BALAJI CONVENT").upper()])
+        ws.append([group_label])
+        ws.append(["STUDENT FEE BALANCE REPORT", f"Academic Year {academic_year}"])
+        ws.append([])
+        header_row = ws.max_row + 1
+        ws.append(["S.No.", "Student Name", "Total Fee Pending"])
+        for cell in ws[header_row]:
+            cell.font = Font(bold=True, color="FFFFFF"); cell.fill = PatternFill("solid", fgColor="1E293B")
+        for i, s in enumerate(students, 1):
+            ws.append([i, s["student_name"], s["pending"]])
+        ws.append(["", "TOTAL", total])
+        for cell in ws[ws.max_row]:
+            cell.font = Font(bold=True)
+        ws.column_dimensions["A"].width = 8
+        ws.column_dimensions["B"].width = 30
+        ws.column_dimensions["C"].width = 18
+        buf = io.BytesIO(); wb.save(buf)
+        return Response(content=buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         headers={"Content-Disposition": f'attachment; filename="Student_Fee_Balance_{group_label.replace(" ", "_").replace("·","-")}.xlsx"'})
+
+    if format == "pdf":
+        import io, html as _html
+        from xhtml2pdf import pisa
+        from fastapi import Response
+        trs = "".join(
+            f"<tr><td>{i}</td><td>{_html.escape(s['student_name'] or '')}</td><td class='r'>Rs. {s['pending']:,.2f}</td></tr>"
+            for i, s in enumerate(students, 1)
+        )
+        html_str = f"""<html><head><style>
+          @page {{ size: A4 portrait; margin: 14mm; }}
+          body {{ font-family: Helvetica, Arial, sans-serif; font-size: 10px; }}
+          h1 {{ font-size: 14px; text-align:center; margin: 0; }}
+          h2 {{ font-size: 12px; text-align:center; margin: 3px 0; }}
+          .sub {{ text-align:center; font-size: 9px; color:#444; margin: 1px 0 10px; }}
+          table {{ width: 100%; border-collapse: collapse; }}
+          th {{ background:#1E293B; color:#fff; padding:5px; text-align:left; font-size: 10px; }}
+          td {{ padding:4px 5px; border-bottom:0.5px solid #ccc; }}
+          td.r {{ text-align:right; }}
+          tfoot td {{ font-weight:bold; border-top: 1.5px solid #222; }}
+        </style></head><body>
+        <h1>{_html.escape((school.get('school_name') or 'BALAJI CONVENT').upper())}</h1>
+        <h2>{_html.escape(group_label)}</h2>
+        <div class="sub">STUDENT FEE BALANCE REPORT &middot; Academic Year {academic_year} &middot; {len(students)} students</div>
+        <table>
+        <thead><tr><th style="width:40px">S.No.</th><th>Student Name</th><th style="width:120px" class="r">Total Fee Pending</th></tr></thead>
+        <tbody>{trs}</tbody>
+        <tfoot><tr><td></td><td>TOTAL</td><td class="r">Rs. {total:,.2f}</td></tr></tfoot>
+        </table></body></html>"""
+        buf = io.BytesIO()
+        pisa.CreatePDF(html_str, dest=buf)
+        return Response(content=buf.getvalue(), media_type="application/pdf",
+                         headers={"Content-Disposition": f'inline; filename="Student_Fee_Balance.pdf"'})
+
+    raise HTTPException(400, f"Unknown format '{format}' - use json, xlsx, or pdf")
+
+# ---------- Fee Edit History (audit) Report ----------
+@router.get("/reports/fee-edit-history")
+async def fee_edit_history_report(
+    student_name: Optional[str] = None,
+    admission_no: Optional[str] = None,
+    class_name: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    edited_by: Optional[str] = None,
+    fee_type: Optional[str] = None,  # "school" | "bus"
+    format: str = "json",
+    user = Depends(require_roles("administrator", "manager")),
+):
+    """Who changed a student's fee, when, what changed, and why - built
+    entirely from the existing audit_log entries the fee-update endpoint has
+    always written (action='fee_update', entity='student_fee_override');
+    never a fabricated/reconstructed history. Restricted to
+    administrator/manager - this is fee-edit audit data, not something every
+    role should be able to browse."""
+    q: Dict[str, Any] = {"action": "fee_update", "entity": "student_fee_override"}
+    if date_from or date_to:
+        rng: Dict[str, Any] = {}
+        if date_from: rng["$gte"] = date_from
+        if date_to: rng["$lte"] = date_to + "T23:59:59"
+        q["timestamp"] = rng
+    if edited_by:
+        q["user_email"] = {"$regex": re.escape(edited_by), "$options": "i"}
+    rows = await db.audit_log.find(q, {"_id": 0}).sort("timestamp", -1).to_list(5000)
+
+    def _match(r):
+        d = r.get("details") or {}
+        if student_name and student_name.strip().lower() not in (d.get("student_name") or "").lower():
+            return False
+        if admission_no and admission_no.strip().lower() not in (d.get("admission_no") or "").lower():
+            return False
+        if class_name and class_name.strip().lower() not in (d.get("class_name") or "").lower():
+            return False
+        if fee_type:
+            is_bus = (d.get("fee_head_name") or "").strip().lower() == "bus fee"
+            if fee_type == "bus" and not is_bus:
+                return False
+            if fee_type == "school" and is_bus:
+                return False
+        return True
+
+    filtered = [r for r in rows if _match(r)]
+    entries = [{
+        "timestamp": r.get("timestamp"), "student_name": (r.get("details") or {}).get("student_name"),
+        "admission_no": (r.get("details") or {}).get("admission_no"), "class_name": (r.get("details") or {}).get("class_name"),
+        "edited_by": r.get("user_email") or (r.get("details") or {}).get("updated_by"),
+        "old_fee": (r.get("details") or {}).get("old_fee"), "new_fee": (r.get("details") or {}).get("new_fee"),
+        "difference": (r.get("details") or {}).get("difference"), "reason": (r.get("details") or {}).get("reason"),
+        "fee_head_name": (r.get("details") or {}).get("fee_head_name"),
+        "via_temporary_access": (r.get("details") or {}).get("via_temporary_access"),
+    } for r in filtered]
+
+    if format == "json":
+        return {"rows": entries, "count": len(entries)}
+
+    school = await get_settings_doc()
+
+    if format == "xlsx":
+        import io, openpyxl
+        from openpyxl.styles import Font, PatternFill
+        from fastapi import Response
+        wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Fee Edit History"
+        headers = ["Date/Time", "Student", "Admission No.", "Class", "Edited By", "Previous Fee", "New Fee", "Difference", "Reason"]
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF"); cell.fill = PatternFill("solid", fgColor="1E293B")
+        for e in entries:
+            ws.append([e["timestamp"], e["student_name"], e["admission_no"], e["class_name"], e["edited_by"],
+                       e["old_fee"], e["new_fee"], e["difference"], e["reason"]])
+        for idx, w in enumerate([20, 22, 14, 12, 22, 12, 12, 12, 34], start=1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(idx)].width = w
+        buf = io.BytesIO(); wb.save(buf)
+        return Response(content=buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         headers={"Content-Disposition": 'attachment; filename="Fee_Edit_History.xlsx"'})
+
+    if format == "pdf":
+        import io, html as _html
+        from xhtml2pdf import pisa
+        from fastapi import Response
+        def _money_or_dash(v):
+            return "-" if v is None else f"Rs. {v:,.2f}"
+        trs = "".join(
+            f"<tr><td>{_html.escape((e['timestamp'] or '')[:16].replace('T',' '))}</td>"
+            f"<td>{_html.escape(e['student_name'] or '-')}</td><td>{_html.escape(e['admission_no'] or '-')}</td>"
+            f"<td>{_html.escape(e['class_name'] or '-')}</td><td>{_html.escape(e['edited_by'] or '-')}</td>"
+            f"<td class='r'>{_money_or_dash(e['old_fee'])}</td>"
+            f"<td class='r'>{_money_or_dash(e['new_fee'])}</td>"
+            f"<td class='r'>{_money_or_dash(e['difference'])}</td>"
+            f"<td>{_html.escape(e['reason'] or '-')}</td></tr>"
+            for e in entries
+        )
+        html_str = f"""<html><head><style>
+          @page {{ size: A4 landscape; margin: 10mm; }}
+          body {{ font-family: Helvetica, Arial, sans-serif; font-size: 8.5px; }}
+          h1 {{ font-size: 14px; text-align:center; margin: 0; }}
+          .sub {{ text-align:center; font-size: 9px; color:#444; margin: 2px 0 8px; }}
+          table {{ width: 100%; border-collapse: collapse; }}
+          th {{ background:#1E293B; color:#fff; padding:4px; text-align:left; font-size: 8.5px; }}
+          td {{ padding:3px 4px; border-bottom:0.5px solid #ccc; }}
+          td.r {{ text-align:right; }}
+        </style></head><body>
+        <h1>{_html.escape((school.get('school_name') or 'BALAJI CONVENT').upper())}</h1>
+        <div class="sub">FEE EDIT HISTORY &middot; {len(entries)} records</div>
+        <table>
+        <thead><tr><th>Date/Time</th><th>Student</th><th>Adm No.</th><th>Class</th><th>Edited By</th><th>Previous Fee</th><th>New Fee</th><th>Difference</th><th>Reason</th></tr></thead>
+        <tbody>{trs}</tbody></table></body></html>"""
+        buf = io.BytesIO()
+        pisa.CreatePDF(html_str, dest=buf)
+        return Response(content=buf.getvalue(), media_type="application/pdf",
+                         headers={"Content-Disposition": 'inline; filename="Fee_Edit_History.pdf"'})
+
+    raise HTTPException(400, f"Unknown format '{format}' - use json, xlsx, or pdf")

@@ -6,6 +6,20 @@ import { toast } from 'sonner';
 
 const LOGO = "/school-logo.jpeg";
 
+// Numeric-aware class ordering (Nursery/KG/etc. before Class 1, then Class 1
+// through Class 12 in actual numeric order) - a plain localeCompare on
+// class_name sorts "Class 10" before "Class 2" since it compares digit-by-
+// digit as text, not as a number.
+const classNameCompare = (a, b) => {
+  const numA = parseInt((a || '').match(/\d+/)?.[0], 10);
+  const numB = parseInt((b || '').match(/\d+/)?.[0], 10);
+  const aNum = !isNaN(numA), bNum = !isNaN(numB);
+  if (aNum && bNum) return numA - numB;
+  if (aNum && !bNum) return 1;
+  if (!aNum && bNum) return -1;
+  return (a || '').localeCompare(b || '');
+};
+
 export default function FeeBrochure() {
   const [structures, setStructures] = useState([]);
   const [classes, setClasses] = useState([]);
@@ -80,10 +94,10 @@ export default function FeeBrochure() {
           {/* Cover */}
           <div className="p-8 border-b-4 border-double border-slate-900 text-center">
             <img src={LOGO} alt="logo" className="w-24 h-24 rounded-full object-cover mx-auto mb-3" />
-            <div className="font-heading text-3xl font-black tracking-tight uppercase">BALAJI CONVENT & JUNIOR COLLEGE</div>
-            <div className="text-sm font-semibold text-slate-700 mt-1">BUTIBORI · DIST. NAGPUR — 441122</div>
+            <div className="font-heading text-3xl font-black tracking-tight uppercase">BALAJI CONVENT</div>
+            <div className="text-sm font-semibold text-slate-700 mt-1">Teacher's Colony, Butibori, Nagpur-441108</div>
             <div className="text-[12px] text-slate-600 mt-3">NURSERY TO CLASS 10 (English · Semi-English · Marathi Medium)</div>
-            <div className="text-[12px] text-slate-600">Junior College — Science · Commerce · Arts · Electronics · Fisheries (State Pattern)</div>
+            <div className="text-[12px] text-slate-600">Junior College — Arts · Commerce · Science · Bi-Focal (State Pattern)</div>
             <div className="inline-block mt-5 px-6 py-2 border-2 border-slate-900 tracking-widest font-bold">FEE STRUCTURE · {ay}</div>
             <div className="italic text-slate-600 text-sm mt-3">Shaping Tomorrow, Building Excellence</div>
           </div>
@@ -103,7 +117,7 @@ export default function FeeBrochure() {
                   </tr>
                 </thead>
                 <tbody>
-                  {groups[medium].sort((a,b)=>a.class_name.localeCompare(b.class_name) || (a.stream||'').localeCompare(b.stream||'') || (a.applies_to||'').localeCompare(b.applies_to||'')).map(fs => (
+                  {groups[medium].sort((a,b)=>classNameCompare(a.class_name,b.class_name) || (a.stream||'').localeCompare(b.stream||'') || (a.applies_to||'').localeCompare(b.applies_to||'')).map(fs => (
                     <tr key={fs.id} className="border-b border-slate-300">
                       <td className="border-r border-slate-300 px-2 py-1.5 font-semibold uppercase">
                         {fs.class_name}{fs.stream ? ` · ${fs.stream}` : ''}

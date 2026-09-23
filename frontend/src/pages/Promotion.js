@@ -59,7 +59,8 @@ export default function Promotion() {
     setBusy(false);
   };
 
-  const cName = id => classes.find(c=>c.id===id)?.name || '-';
+  const cLabel = (c) => `${c.name}${c.stream ? ` · ${c.stream}` : ''}`;
+  const cName = id => { const c = classes.find(c=>c.id===id); return c ? cLabel(c) : '-'; };
 
   return (
     <>
@@ -81,13 +82,13 @@ export default function Promotion() {
           <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
             <F label="From Class">
               <select data-testid="promo-from" className={inp} value={fromClass} onChange={e=>setFromClass(e.target.value)}>
-                <option value="">Select…</option>{availClasses.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                <option value="">Select…</option>{availClasses.map(c=><option key={c.id} value={c.id}>{cLabel(c)}</option>)}
               </select>
             </F>
             <ArrowRight className="w-5 h-5 text-slate-400 mb-2.5" />
             <F label="To Class">
               <select data-testid="promo-to" className={inp} value={toClass} onChange={e=>setToClass(e.target.value)}>
-                <option value="">Select…</option>{availClasses.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                <option value="">Select…</option>{availClasses.map(c=><option key={c.id} value={c.id}>{cLabel(c)}</option>)}
               </select>
             </F>
           </div>

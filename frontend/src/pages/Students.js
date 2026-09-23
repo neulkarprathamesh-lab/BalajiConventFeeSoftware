@@ -18,15 +18,36 @@ export default function Students() {
   const [depts, setDepts] = useState([]);
   const [classes, setClasses] = useState([]);
   const [dept, setDept] = useState('');
+  const [medium, setMedium] = useState('');
+  const [stream, setStream] = useState('');
+  const [section, setSection] = useState('');
   const [classFilter, setClassFilter] = useState('');
   const [openNew, setOpenNew] = useState(false);
   const [openImport, setOpenImport] = useState(false);
   const nav = useNavigate();
 
+  // Junior College students are separated by stream (Arts/Commerce/Science/
+  // Bi-Focal), never by English/Marathi medium — so the Medium filter is
+  // meaningless (and disabled) whenever this department is selected.
+  const isJuniorCollege = depts.find(d => d.id === dept)?.code === 'JC';
+
   const load = () => {
     const p = new URLSearchParams();
     if (q) p.set('q', q);
     if (dept) p.set('department_id', dept);
+    if (medium && !isJuniorCollege) p.set('medium', medium);
+    // Stream (Arts/Commerce/Science/Bi-Focal) is the ONLY thing that
+    // actually narrows a "Class 11"/"Class 12" selection down to one group —
+    // class_name alone matches every stream sharing that class name. Without
+    // this, selecting a class + stream in the UI silently showed every
+    // stream mixed together.
+    if (stream && isJuniorCollege) p.set('stream', stream);
+    // Section (A/B/C) — same exact-match pattern as Medium/Stream above, and
+    // the same free-text field Live Fee Update already uses for it, so this
+    // is one consistent filtering system rather than a per-screen one-off.
+    // Applies to whichever class actually has sections (mainly 1-8); a
+    // harmless no-op filter for classes that don't use sections.
+    if (section) p.set('section', section);
     if (classFilter) p.set('class_name', classFilter);
     api.get(`/students?${p.toString()}`).then(r => setRows(r.data));
   };
@@ -35,7 +56,13 @@ export default function Students() {
     api.get('/departments').then(r => setDepts(r.data));
     api.get('/classes').then(r => setClasses(r.data));
   }, []);
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [dept, classFilter]);
+  // Switching into Junior College always clears any stale English/Marathi
+  // selection rather than silently filtering by a medium that can't apply.
+  useEffect(() => { if (isJuniorCollege && medium) setMedium(''); }, [isJuniorCollege]); // eslint-disable-line
+  // Switching OUT of Junior College clears any stale stream selection the
+  // same way — a stream filter can't apply outside Junior College either.
+  useEffect(() => { if (!isJuniorCollege && stream) setStream(''); }, [isJuniorCollege]); // eslint-disable-line
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [dept, medium, stream, section, classFilter]);
 
   // One entry per distinct class NAME, ignoring medium/stream/section entirely - "Class 9"
   // filters every 9th-grade student regardless of which medium they're in.
@@ -75,10 +102,54 @@ export default function Students() {
             <option value="">All Departments</option>
             {depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
+          <select
+            data-testid="students-medium"
+            value={isJuniorCollege ? '' : medium}
+            onChange={(e)=>setMedium(e.target.value)}
+            disabled={isJuniorCollege}
+            title={isJuniorCollege ? 'Not applicable — Junior College is separated by stream, not medium' : undefined}
+            className={`h-10 px-3 border border-slate-300 rounded text-sm ${isJuniorCollege ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-white'}`}
+          >
+            {isJuniorCollege ? (
+              <option value="">Not Applicable</option>
+            ) : (
+              <>
+                <option value="">All Mediums</option>
+                <option value="English Medium">English</option>
+                <option value="Semi Medium (Marathi)">Marathi</option>
+              </>
+            )}
+          </select>
+          <select
+            data-testid="students-stream"
+            value={isJuniorCollege ? stream : ''}
+            onChange={(e)=>setStream(e.target.value)}
+            disabled={!isJuniorCollege}
+            title={!isJuniorCollege ? 'Not applicable — only Junior College is separated by stream' : undefined}
+            className={`h-10 px-3 border border-slate-300 rounded text-sm ${!isJuniorCollege ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-white'}`}
+          >
+            {!isJuniorCollege ? (
+              <option value="">Not Applicable</option>
+            ) : (
+              <>
+                <option value="">All Streams</option>
+                <option value="Arts">Arts</option>
+                <option value="Commerce">Commerce</option>
+                <option value="Science">Science</option>
+                <option value="Bi-Focal">Bi-Focal</option>
+              </>
+            )}
+          </select>
           <select data-testid="students-class" value={classFilter} onChange={(e)=>setClassFilter(e.target.value)} className="h-10 px-3 border border-slate-300 rounded text-sm bg-white">
             <option value="">All Classes</option>
             {classNameOptions.map(n => <option key={n} value={n}>{n}</option>)}
           </select>
+          <input
+            data-testid="students-section"
+            value={section} onChange={(e)=>setSection(e.target.value)}
+            placeholder="Section (A/B/C)"
+            className="h-10 w-32 px-3 border border-slate-300 rounded text-sm"
+          />
           <button onClick={load} className="h-10 px-4 bg-slate-900 text-white text-sm rounded hover:bg-slate-800">Search</button>
         </div>
 
@@ -188,19 +259,58 @@ BC-EP-100,Sample Student,EP,Class 3,Guardian Name,9876543210`;
   );
 }
 
+const JC_STREAMS = ['Arts', 'Commerce', 'Science', 'Bi-Focal'];
+
 function NewStudent({ depts, classes, onClose }) {
   const [f, setF] = useState({ admission_no:'', name:'', department_id:'', class_id:'', guardian_name:'', guardian_mobile:'', address:'' });
+  // Junior College needs its own Class-name + Stream state because a single
+  // "Class 12" NAME maps to five different underlying class_id rows (one per
+  // stream) - that's what let the plain class_id dropdown show "Class 12"
+  // duplicated once per stream. Class name and Stream are asked separately
+  // here and only THEN resolved down to the one real class_id underneath.
+  const [jcClassName, setJcClassName] = useState('');
+  const [stream, setStream] = useState('');
+  const [firstYearInCollege, setFirstYearInCollege] = useState(false);
+  const [feePreview, setFeePreview] = useState(null); // {loading} | {data} | {error}
   const [err, setErr] = useState('');
   const set = (k, v) => setF({ ...f, [k]: v });
+
+  const isJC = depts.find(d => d.id === f.department_id)?.code === 'JC';
+  const availClasses = classes.filter(c => c.department_id === f.department_id);
+  const jcClassNames = [...new Set(availClasses.map(c => c.name))].sort();
+  const resolvedJcClassId = isJC ? (availClasses.find(c => c.name === jcClassName && c.stream === stream)?.id || '') : '';
+
+  useEffect(() => { setJcClassName(''); setStream(''); setFirstYearInCollege(false); setFeePreview(null); }, [f.department_id]);
+  useEffect(() => { setStream(''); setFeePreview(null); }, [jcClassName]);
+
+  // Immediately look up the real applicable fee for this exact Academic Year
+  // + Class + Stream via the same resolver bulk-import already uses — never
+  // a generic Class 11/12 figure, and never guessed on the frontend.
+  useEffect(() => {
+    if (!isJC || !jcClassName || !stream) { setFeePreview(null); return; }
+    let cancelled = false;
+    setFeePreview({ loading: true });
+    api.get('/fee-structures/resolve', { params: { medium: 'Junior College', class_name: jcClassName, stream, first_year_in_college: firstYearInCollege } })
+      .then(r => { if (!cancelled) setFeePreview({ data: r.data }); })
+      .catch(ex => { if (!cancelled) setFeePreview({ error: ex?.response?.data?.detail || 'No fee structure configured for this Class + Stream yet.' }); });
+    return () => { cancelled = true; };
+  }, [isJC, jcClassName, stream, firstYearInCollege]);
+
   const submit = async (e) => {
     e.preventDefault(); setErr('');
-    try { await api.post('/students', f); onClose(); }
+    let payload = { ...f };
+    if (isJC) {
+      if (!stream) { setErr('Stream is required for Junior College.'); return; }
+      if (!resolvedJcClassId) { setErr('Could not resolve this Class + Stream — contact admin.'); return; }
+      payload = { ...payload, class_id: resolvedJcClassId, medium: 'Junior College', stream, first_year_in_college: firstYearInCollege };
+      if (feePreview?.data?.id) payload.fee_structure_id = feePreview.data.id;
+    }
+    try { await api.post('/students', payload); onClose(); }
     catch (ex) {
       const d = ex?.response?.data?.detail;
       setErr(typeof d === 'string' ? d : 'Failed to save');
     }
   };
-  const availClasses = classes.filter(c => c.department_id === f.department_id);
   return (
     <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 p-4">
       <form onSubmit={submit} className="bg-white rounded shadow-lg w-full max-w-lg" data-testid="new-student-form">
@@ -212,7 +322,33 @@ function NewStudent({ depts, classes, onClose }) {
           <Field label="Admission No *"><input required data-testid="ns-admno" className={inp} value={f.admission_no} onChange={e=>set('admission_no', e.target.value)} /></Field>
           <Field label="Full Name *"><input required data-testid="ns-name" className={inp} value={f.name} onChange={e=>set('name', e.target.value)} /></Field>
           <Field label="Department *"><select required data-testid="ns-dept" className={inp} value={f.department_id} onChange={e=>set('department_id', e.target.value)}><option value="">Select…</option>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></Field>
-          <Field label="Class *"><select required data-testid="ns-class" className={inp} value={f.class_id} onChange={e=>set('class_id', e.target.value)}><option value="">Select…</option>{availClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
+          {isJC ? (
+            <Field label="Class *"><select required data-testid="ns-class" className={inp} value={jcClassName} onChange={e=>setJcClassName(e.target.value)}><option value="">Select…</option>{jcClassNames.map(n => <option key={n} value={n}>{n}</option>)}</select></Field>
+          ) : (
+            <Field label="Class *"><select required data-testid="ns-class" className={inp} value={f.class_id} onChange={e=>set('class_id', e.target.value)}><option value="">Select…</option>{availClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
+          )}
+          {isJC && jcClassName && (
+            <Field label="Stream *"><select required data-testid="ns-stream" className={inp} value={stream} onChange={e=>setStream(e.target.value)}><option value="">Select…</option>{JC_STREAMS.map(s => <option key={s} value={s}>{s}</option>)}</select></Field>
+          )}
+          {isJC && jcClassName === 'Class 12' && stream && (
+            <div className="col-span-2 flex items-center gap-2 text-sm text-slate-700 -mt-1">
+              <input type="checkbox" id="ns-first-year" data-testid="ns-first-year" checked={firstYearInCollege} onChange={e=>setFirstYearInCollege(e.target.checked)} />
+              <label htmlFor="ns-first-year">New admission to Class 12 (not promoted from Class 11 at this school)</label>
+            </div>
+          )}
+          {isJC && jcClassName && stream && (
+            <div className="col-span-2" data-testid="ns-fee-preview">
+              {feePreview?.loading && <div className="text-sm text-slate-500">Checking applicable fee…</div>}
+              {feePreview?.error && <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">{feePreview.error}</div>}
+              {feePreview?.data && (
+                <div className="border border-blue-200 bg-blue-50 rounded p-3">
+                  <div className="text-[11px] uppercase tracking-widest text-blue-700 font-semibold">Applicable Fee — {jcClassName} · {stream} · {feePreview.data.academic_year}</div>
+                  <div className="text-xl font-bold text-slate-900 mt-0.5">₹{Number(feePreview.data.total).toLocaleString('en-IN')}</div>
+                  <div className="text-[12px] text-slate-600 mt-1">{(feePreview.data.items || []).map(it => `${it.fee_head_name}: ₹${Number(it.amount).toLocaleString('en-IN')}`).join(' · ')}</div>
+                </div>
+              )}
+            </div>
+          )}
           <Field label="Guardian Name"><input className={inp} value={f.guardian_name} onChange={e=>set('guardian_name', e.target.value)} /></Field>
           <Field label="Guardian Mobile"><input className={inp} value={f.guardian_mobile} onChange={e=>set('guardian_mobile', e.target.value)} /></Field>
           <div className="col-span-2"><Field label="Address"><textarea rows="2" className={inp} value={f.address} onChange={e=>set('address', e.target.value)} /></Field></div>

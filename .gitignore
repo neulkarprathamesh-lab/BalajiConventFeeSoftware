@@ -38,3 +38,14 @@ frontend/.claude/
 # across the whole directory — excluded from this snapshot for that reason,
 # not because tests are unwanted. See commit message / report for detail.
 backend/tests/
+
+# Client-update signing keys — the PRIVATE half must only ever exist on the
+# build machine (never deployed, never shipped, never committed); excluding
+# the whole keys/ directory rather than just the private key so a future
+# public key never accidentally hides a re-added private one alongside it.
+backend/keys/
+
+# Ad-hoc data-audit exports run against the live production database —
+# these contain real student names, admission numbers, and fee/payment
+# figures. Never tracked in git regardless of where/when they're generated.
+*.csv

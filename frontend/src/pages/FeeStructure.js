@@ -78,7 +78,7 @@ export default function FeeStructure() {
         <div className="lg:col-span-2 bg-white border border-slate-200 rounded p-4">
           <div className="grid grid-cols-2 gap-4 mb-4">
             <F label="Department"><select className={inp} value={dept} onChange={e=>{setDept(e.target.value); setCls('');}}><option value="">Select…</option>{depts.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</select></F>
-            <F label="Class"><select className={inp} value={cls} onChange={e=>setCls(e.target.value)}><option value="">Select…</option>{availClasses.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></F>
+            <F label="Class"><select className={inp} value={cls} onChange={e=>setCls(e.target.value)}><option value="">Select…</option>{availClasses.map(c=><option key={c.id} value={c.id}>{c.name}{c.medium && c.medium !== 'English Medium' && c.medium !== 'Semi Medium (Marathi)' ? ` · ${c.medium}` : ''}{c.stream ? ` · ${c.stream}` : ''}</option>)}</select></F>
           </div>
           <div className="text-[11px] uppercase tracking-wide text-slate-600 mb-2">Line Items</div>
           <table className="w-full dense-table">
@@ -243,7 +243,7 @@ function DuplicateModal({ src, classes, depts, onClose, onDone }) {
               <option value="">Select…</option>
               {classes.filter(c => c.id !== src.class_id).map(c => {
                 const d = depts.find(x => x.id === c.department_id);
-                return <option key={c.id} value={c.id}>{d?.name} · {c.name}</option>;
+                return <option key={c.id} value={c.id}>{d?.name} · {c.name}{c.stream ? ` · ${c.stream}` : ''}</option>;
               })}
             </select>
           </label>

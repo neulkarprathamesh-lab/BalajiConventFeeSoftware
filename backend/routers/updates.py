@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.exceptions import InvalidSignature
@@ -47,6 +48,12 @@ from core import (
 from routers.snapshots import _dump_config_now
 
 router = APIRouter(prefix="/api/updates", tags=["updates"])
+# Separate router/prefix for CLIENT (Electron shell) update distribution -
+# see the "Client update distribution" section near the bottom of this file.
+# Kept in the SAME module as the server .bcupdate system above so the crypto
+# helpers, ZIP-safety checks, and manifest conventions are shared/reused
+# rather than duplicated, while the URL surface and signing key are distinct.
+client_router = APIRouter(prefix="/api/client-updates", tags=["client-updates"])
 
 # ---------------- Paths ----------------
 VERSION_FILE  = APP_ROOT / "version.json"
@@ -608,3 +615,238 @@ async def public_key(user = Depends(get_current_user)):
         "public_key_pem": PUBLIC_KEY.read_text(),
         "fingerprint_sha256_16": _pubkey_fingerprint(),
     }
+
+
+# =============================================================================
+# Client (Electron shell) update distribution
+# =============================================================================
+# A CLIENT update is fundamentally different from the server updates above:
+# it replaces only the Electron app's own code (resources/app.asar) on each
+# Client PC's own filesystem - it is downloaded, verified, backed up, and
+# applied ENTIRELY by the Client itself (see updater/updater.js:
+# checkForClientUpdate/downloadClientUpdate/applyClientUpdate). This Main
+# Server only ever stores and serves the signed package + its metadata; it
+# never reaches into a Client PC's filesystem, and a Client update NEVER
+# touches this server's own backend/frontend/database.
+#
+# Signed with its OWN dedicated keypair (backend/keys/client_update_*.pem),
+# deliberately separate from the server update key above: that key's private
+# half is intentionally never present on a deployed server (see
+# ensure_keypair()'s doc-comment) and must stay that way, so a new keypair
+# was generated specifically for this feature. Only the public half is ever
+# present here or inside the shipped Electron bundle.
+CLIENT_PRIVATE_KEY = KEYS_DIR / "client_update_private.pem"  # build-machine only - never required at runtime, never served
+CLIENT_PUBLIC_KEY  = KEYS_DIR / "client_update_public.pem"
+CLIENT_UPDATES_DIR = APP_ROOT / "client_updates"             # published .bcupdate files live here, nowhere else
+MAX_CLIENT_UPLOAD_MB = 300
+
+
+def _verify_client_signature(manifest_bytes: bytes, signature_b64: str) -> None:
+    if not CLIENT_PUBLIC_KEY.exists():
+        raise HTTPException(500, "Client update public key is not present on this server.")
+    pub = serialization.load_pem_public_key(CLIENT_PUBLIC_KEY.read_bytes())
+    try:
+        pub.verify(
+            base64.b64decode(signature_b64),
+            manifest_bytes,
+            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+            hashes.SHA256(),
+        )
+    except (InvalidSignature, ValueError):
+        raise HTTPException(400, "Client update signature is invalid — this package was not produced by the software vendor.")
+
+
+def _validate_client_manifest(manifest: Dict[str, Any]) -> None:
+    for k in ("version", "min_supported_version", "release_notes", "files", "package_type"):
+        if k not in manifest:
+            raise HTTPException(400, f"Client update manifest is missing required field '{k}'.")
+    if manifest.get("package_type") != "client":
+        raise HTTPException(400, "This package is not a client update package (package_type != 'client').")
+    files = manifest.get("files") or {}
+    if list(files.keys()) != ["resources/app.asar"]:
+        # Deliberately narrow: a client update is ALWAYS exactly one file
+        # (the Electron app's own code bundle). Anything else is refused
+        # outright rather than guessing at a broader, riskier apply surface.
+        raise HTTPException(400, "Client update packages must contain exactly one file: resources/app.asar.")
+
+
+@client_router.get("/latest")
+async def client_update_latest():
+    """Public, no-auth - a Client PC must be able to check for updates before
+    anyone has logged in (matches the existing no-auth GET /api/version
+    precedent). Returns only non-sensitive metadata; the actual package is
+    fetched separately via /download, never inline here."""
+    doc = await db.client_updates.find_one({"is_published": True}, {"_id": 0})
+    if not doc:
+        return {"published": False}
+    return {
+        "published": True,
+        "version": doc["version"],
+        "release_notes": doc.get("release_notes", ""),
+        "min_supported_version": doc.get("min_supported_version", "0.0.0"),
+        "release_date": doc.get("build_date") or doc.get("published_at"),
+        "package_name": doc["filename"],
+        "package_size": doc["size_bytes"],
+        "sha256": doc["sha256"],
+        "signature": doc["signature_b64"],
+        "download_url": f"/api/client-updates/download/{doc['filename']}",
+    }
+
+
+@client_router.get("/download/{filename}")
+async def client_update_download(filename: str):
+    """Public (a Client PC downloads this before/without a logged-in user),
+    but only ever serves the EXACT file currently marked published - never an
+    arbitrary path, never a directory listing, never anything else on disk."""
+    doc = await db.client_updates.find_one({"is_published": True, "filename": filename}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "No published client update matches that filename.")
+    path = CLIENT_UPDATES_DIR / filename
+    if not path.exists():
+        raise HTTPException(404, "Published update record exists but its file is missing on disk.")
+    return FileResponse(path, media_type="application/octet-stream", filename=filename)
+
+
+@client_router.get("/history")
+async def client_update_history(user = Depends(require_roles("administrator", "manager"))):
+    return await db.client_updates.find({}, {"_id": 0}).sort("published_at", -1).to_list(200)
+
+
+@client_router.post("/publish")
+async def client_update_publish(file: UploadFile = File(...), user = Depends(require_admin_pin)):
+    """Upload, fully verify, and publish a signed CLIENT .bcupdate. Cashier
+    can never reach this (require_admin_pin already implies administrator/
+    manager + PIN, matching the server-update upload endpoint above)."""
+    if not (file.filename or "").lower().endswith(".bcupdate"):
+        raise HTTPException(400, "File must have .bcupdate extension.")
+    CLIENT_UPDATES_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_id = gen_id()
+    tmp_zip = CLIENT_UPDATES_DIR / f".staging-{tmp_id}.bcupdate"
+    written = 0
+    with open(tmp_zip, "wb") as out:
+        while chunk := await file.read(1024 * 1024):
+            written += len(chunk)
+            if written > MAX_CLIENT_UPLOAD_MB * 1024 * 1024:
+                out.close(); tmp_zip.unlink(missing_ok=True)
+                raise HTTPException(413, f"Update package larger than {MAX_CLIENT_UPLOAD_MB} MB — aborting.")
+            out.write(chunk)
+    if not zipfile.is_zipfile(tmp_zip):
+        tmp_zip.unlink(missing_ok=True)
+        raise HTTPException(400, "Uploaded file is not a valid ZIP archive.")
+
+    try:
+        with zipfile.ZipFile(tmp_zip, "r") as zf:
+            names = zf.namelist()
+            for name in names:
+                if name.startswith("/") or ".." in Path(name).parts:
+                    raise HTTPException(400, f"Illegal path in archive: {name}")
+            for required in ("manifest.json", "manifest.sig", "payload/resources/app.asar"):
+                if required not in names:
+                    raise HTTPException(400, f"Update archive is missing required entry: {required}")
+            manifest_bytes = zf.read("manifest.json")
+            signature_b64 = zf.read("manifest.sig").decode().strip()
+            payload_bytes = zf.read("payload/resources/app.asar")
+
+        _verify_client_signature(manifest_bytes, signature_b64)
+        manifest = _json.loads(manifest_bytes)
+        _validate_client_manifest(manifest)
+
+        expected_sha = manifest["files"]["resources/app.asar"]
+        actual_sha = hashlib.sha256(payload_bytes).hexdigest()
+        if actual_sha != expected_sha:
+            raise HTTPException(400, f"Checksum mismatch for resources/app.asar (expected {expected_sha}, got {actual_sha}).")
+
+        version = str(manifest["version"])
+        # Never allow publishing a version that is not a strict upgrade over
+        # whatever is currently published - mirrors "do not downgrade" on the
+        # Client side, enforced here too as defence in depth.
+        current = await db.client_updates.find_one({"is_published": True}, {"_id": 0, "version": 1})
+        if current and not _semver_ge(version, current["version"]):
+            if version == current["version"]:
+                raise HTTPException(400, f"Version {version} is already published.")
+            raise HTTPException(400, f"Refusing to publish {version}: currently published version is {current['version']} (no downgrades).")
+
+    except HTTPException:
+        tmp_zip.unlink(missing_ok=True)
+        raise
+
+    final_name = f"BalajiFeeHub-Client-v{version}.bcupdate"
+    final_path = CLIENT_UPDATES_DIR / final_name
+    await db.client_updates.update_many({"is_published": True}, {"$set": {"is_published": False, "unpublished_at": now_iso()}})
+    shutil.move(str(tmp_zip), str(final_path))
+    package_sha256 = _sha256_file(final_path)
+
+    doc = {
+        "id": gen_id(), "version": version, "filename": final_name,
+        "size_bytes": final_path.stat().st_size, "sha256": package_sha256,
+        "signature_b64": signature_b64, "release_notes": manifest.get("release_notes", ""),
+        "min_supported_version": manifest.get("min_supported_version", "0.0.0"),
+        "build_date": manifest.get("build_date"),
+        "is_published": True, "published_at": now_iso(), "published_by": user["name"],
+        "unpublished_at": None,
+    }
+    await db.client_updates.insert_one(dict(doc))
+    await audit(user, "client_update_publish", "client_update", doc["id"], {
+        "version": version, "filename": final_name, "size_bytes": doc["size_bytes"],
+    })
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+
+@client_router.post("/unpublish")
+async def client_update_unpublish(user = Depends(require_admin_pin)):
+    doc = await db.client_updates.find_one({"is_published": True})
+    if not doc:
+        raise HTTPException(404, "No client update is currently published.")
+    await db.client_updates.update_many({"is_published": True}, {"$set": {"is_published": False, "unpublished_at": now_iso()}})
+    await audit(user, "client_update_unpublish", "client_update", doc["id"], {"version": doc["version"]})
+    return {"ok": True, "version": doc["version"]}
+
+
+# ---------------- Client update success/failure reporting ----------------
+# A Client PC self-updating has no logged-in admin session at that moment
+# (and may be reporting a FAILED update where it can't even reach the normal
+# app), so this is intentionally public like /latest and /download - but the
+# payload accepted is a strict allowlist, never arbitrary data, and nothing
+# here can create/modify/delete anything except this one diagnostic record.
+_REPORT_ALLOWED_KEYS = {
+    "pc_hostname", "installed_version", "target_version", "stage", "ok",
+    "error_message", "rolled_back", "relaunch_failed", "journal", "reported_at",
+}
+
+
+@client_router.post("/report")
+async def client_update_report(body: Dict[str, Any]):
+    doc = {k: body.get(k) for k in _REPORT_ALLOWED_KEYS if k in body}
+    doc["id"] = gen_id()
+    doc["received_at"] = now_iso()
+    doc["resolved"] = False
+    # journal/error_message are the only free-text fields - hard-cap their
+    # size regardless of what a client sends, defence in depth beyond the
+    # allowlist above.
+    if isinstance(doc.get("error_message"), str):
+        doc["error_message"] = doc["error_message"][:500]
+    if isinstance(doc.get("journal"), list):
+        doc["journal"] = doc["journal"][-20:]
+    await db.client_update_reports.insert_one(doc)
+    return {"ok": True}
+
+
+@client_router.get("/reports")
+async def client_update_reports(include_resolved: bool = False, user = Depends(require_roles("administrator", "manager"))):
+    q: Dict[str, Any] = {} if include_resolved else {"resolved": {"$ne": True}}
+    rows = await db.client_update_reports.find(q, {"_id": 0}).sort("received_at", -1).to_list(500)
+    return rows
+
+
+@client_router.post("/reports/{report_id}/resolve")
+async def resolve_client_update_report(report_id: str, user = Depends(require_roles("administrator", "manager"))):
+    doc = await db.client_update_reports.find_one({"id": report_id})
+    if not doc:
+        raise HTTPException(404, "Report not found")
+    # Soft-resolve only - the diagnostic record is never deleted, it just
+    # stops showing in the default (unresolved) admin view.
+    await db.client_update_reports.update_one({"id": report_id}, {"$set": {
+        "resolved": True, "resolved_at": now_iso(), "resolved_by": user["name"],
+    }})
+    await audit(user, "client_update_report_resolve", "client_update_report", report_id, {"pc_hostname": doc.get("pc_hostname")})
+    return {"ok": True}

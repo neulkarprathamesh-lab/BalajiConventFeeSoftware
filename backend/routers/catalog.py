@@ -132,8 +132,8 @@ def _build_fee_structure_pdf_html(academic_year: str, rows: List[dict]) -> str:
       .tag {{ font-size: 8px; padding: 1px 4px; background:#fff3cd; color:#8a6300; }}
     </style></head><body>
     <div class="cover">
-      <h1>BALAJI CONVENT &amp; JUNIOR COLLEGE</h1>
-      <div class="sub">BUTIBORI &middot; DIST. NAGPUR &mdash; 441122</div>
+      <h1>BALAJI CONVENT</h1>
+      <div class="sub">Teacher's Colony, Butibori, Nagpur-441108</div>
       <div class="badge">FEE STRUCTURE &middot; {_html.escape(academic_year)}</div>
     </div>
     {''.join(medium_blocks) if medium_blocks else '<p>No fee structures loaded for this academic year yet.</p>'}
@@ -391,10 +391,17 @@ async def seed_fee_structures_for_year(academic_year: str, replace: bool = False
         await db.fee_structures.delete_many({"academic_year": ay, "seeded_from": filename})
 
     created_classes = 0; created_structures = 0; skipped = 0
+    from core import canonical_stream
     for row in rows:
         cname = row["class_name"]
         medium = row["medium"]
-        stream = row.get("stream")
+        # The seed JSON files carry the source documents' own historical
+        # terminology verbatim ("Electronics", "Fisheries") - canonicalize
+        # here, at the one place classes/fee_structures actually get created
+        # from them, so re-running this seed (e.g. "Load 2025-26") can never
+        # reintroduce non-canonical, live-selectable stream rows alongside
+        # "Bi-Focal" (see JC_STREAM_CANONICAL in core.py).
+        stream = canonical_stream(row.get("stream")) if row.get("stream") else None
         applies_to = row.get("applies_to", "all")
         d = pick_dept(medium, cname)
         if not d:

@@ -38,7 +38,7 @@ export default function AssignStudents() {
   const targetClass = classes.find(c => c.id === toClass);
   const availTargetFs = structures.filter(s => s.class_id === toClass);
   const selectedIds = Object.keys(selected).filter(id => selected[id]);
-  const cName = (id) => classes.find(c => c.id === id)?.name || '-';
+  const cName = (id) => { const c = classes.find(c => c.id === id); return c ? `${c.name}${c.stream ? ` · ${c.stream}` : ''}` : '-'; };
   const dName = (id) => depts.find(d => d.id === id)?.name || '-';
 
   const submit = async () => {
@@ -69,7 +69,7 @@ export default function AssignStudents() {
               <input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==='Enter'&&searchStudents()} placeholder="Search admission no, name or mobile…" className={`${inp} pl-9`} />
             </div>
             <select value={fromDept} onChange={e=>{setFromDept(e.target.value); setFromClass('');}} className={inp+' w-44'}><option value="">All depts</option>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select>
-            <select value={fromClass} onChange={e=>setFromClass(e.target.value)} className={inp+' w-52'}><option value="">All classes</option>{availFromClasses.map(c => <option key={c.id} value={c.id}>{dName(c.department_id)} · {c.name}{c.medium?` (${c.medium})`:''}</option>)}</select>
+            <select value={fromClass} onChange={e=>setFromClass(e.target.value)} className={inp+' w-52'}><option value="">All classes</option>{availFromClasses.map(c => <option key={c.id} value={c.id}>{dName(c.department_id)} · {c.name}{c.medium?` (${c.medium})`:''}{c.stream?` · ${c.stream}`:''}</option>)}</select>
             <button onClick={searchStudents} className="h-9 px-4 bg-slate-900 text-white rounded text-sm">Search</button>
           </div>
 
@@ -103,7 +103,7 @@ export default function AssignStudents() {
             <label className="block"><div className="text-[11px] uppercase tracking-wide text-slate-600 mb-1">Class</div>
               <select data-testid="as-to-class" value={toClass} onChange={e=>{setToClass(e.target.value); setToFs('');}} className={inp}>
                 <option value="">Select…</option>
-                {classes.map(c => <option key={c.id} value={c.id}>{dName(c.department_id)} · {c.name}{c.medium?` (${c.medium})`:''}</option>)}
+                {classes.map(c => <option key={c.id} value={c.id}>{dName(c.department_id)} · {c.name}{c.medium?` (${c.medium})`:''}{c.stream?` · ${c.stream}`:''}</option>)}
               </select>
             </label>
             {targetClass && (
