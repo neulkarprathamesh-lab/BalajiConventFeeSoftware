@@ -409,7 +409,7 @@ async def day_end_report(
 
     payload: Dict[str, Any] = {"date": day, "generated_at": now_iso(), "generated_by": user["name"]}
     if cashier_id:
-        cashier = await db.users.find_one({"id": cashier_id}, {"_id":0, "password_hash":0}) or {"name": "Unknown"}
+        cashier = await db.users.find_one({"id": cashier_id}, {"_id":0, "password_hash":0, "pin_hash":0}) or {"name": "Unknown"}
         payload["cashier"] = {"id": cashier_id, "name": cashier.get("name"), "role": cashier.get("role")}
         payload.update(agg_of(receipts))
         payload["receipts"] = [
@@ -424,7 +424,7 @@ async def day_end_report(
             by_cashier.setdefault(r.get("cashier_id","unknown"), []).append(r)
         cashiers = []
         for cid, rs in by_cashier.items():
-            u = await db.users.find_one({"id": cid}, {"_id":0, "password_hash":0}) or {"name": rs[0].get("cashier_name","Unknown")}
+            u = await db.users.find_one({"id": cid}, {"_id":0, "password_hash":0, "pin_hash":0}) or {"name": rs[0].get("cashier_name","Unknown")}
             item = {"id": cid, "name": u.get("name"), "role": u.get("role"), **agg_of(rs)}
             cashiers.append(item)
         cashiers.sort(key=lambda x: -x["net"])

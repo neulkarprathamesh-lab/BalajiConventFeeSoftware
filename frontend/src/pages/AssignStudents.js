@@ -3,6 +3,7 @@ import api from '@/lib/api';
 import { PageHeader } from '@/components/Layout';
 import { toast } from 'sonner';
 import { Search, Users } from 'lucide-react';
+import useLiveRefresh from '@/lib/useLiveRefresh';
 
 export default function AssignStudents() {
   const [depts, setDepts] = useState([]);
@@ -23,18 +24,34 @@ export default function AssignStudents() {
     api.get('/fee-structures').then(r => setStructures(r.data));
   }, []);
 
-  const searchStudents = async () => {
+  // `preserveSelection` distinguishes an explicit search (filters/query
+  // changed, or the user clicked Search - selection legitimately resets to
+  // "all shown") from a background live-refresh, which must never silently
+  // wipe a cashier's in-progress checkbox choices out from under them:
+  // existing selections are kept for students still in the result, and only
+  // newly-appeared students default to selected.
+  const searchStudents = async (opts = {}) => {
+    const { preserveSelection = false } = opts;
     const p = new URLSearchParams({ limit: '500' });
     if (q) p.set('q', q);
     if (fromDept) p.set('department_id', fromDept);
     if (fromClass) p.set('class_id', fromClass);
     const { data } = await api.get(`/students?${p.toString()}`);
     setRows(data);
-    setSelected(Object.fromEntries(data.map(s => [s.id, true])));
+    if (preserveSelection) {
+      setSelected(prev => Object.fromEntries(data.map(s => [s.id, s.id in prev ? prev[s.id] : true])));
+    } else {
+      setSelected(Object.fromEntries(data.map(s => [s.id, true])));
+    }
   };
   useEffect(() => { searchStudents(); /* eslint-disable-next-line */ }, [fromDept, fromClass]);
+  useLiveRefresh(() => searchStudents({ preserveSelection: true }), 10000);
 
-  const availFromClasses = classes.filter(c => !fromDept || c.department_id === fromDept);
+  // Legacy stream names are never a valid NEW selection - see Promotion.js
+  // for the same rule. Underlying documents are left alone.
+  const LEGACY_STREAMS = ['Fisheries', 'Electronics'];
+  const availFromClasses = classes.filter(c => (!fromDept || c.department_id === fromDept) && !LEGACY_STREAMS.includes(c.stream));
+  const availTargetClasses = classes.filter(c => !LEGACY_STREAMS.includes(c.stream));
   const targetClass = classes.find(c => c.id === toClass);
   const availTargetFs = structures.filter(s => s.class_id === toClass);
   const selectedIds = Object.keys(selected).filter(id => selected[id]);
@@ -103,7 +120,7 @@ export default function AssignStudents() {
             <label className="block"><div className="text-[11px] uppercase tracking-wide text-slate-600 mb-1">Class</div>
               <select data-testid="as-to-class" value={toClass} onChange={e=>{setToClass(e.target.value); setToFs('');}} className={inp}>
                 <option value="">Select…</option>
-                {classes.map(c => <option key={c.id} value={c.id}>{dName(c.department_id)} · {c.name}{c.medium?` (${c.medium})`:''}{c.stream?` · ${c.stream}`:''}</option>)}
+                {availTargetClasses.map(c => <option key={c.id} value={c.id}>{dName(c.department_id)} · {c.name}{c.medium?` (${c.medium})`:''}{c.stream?` · ${c.stream}`:''}</option>)}
               </select>
             </label>
             {targetClass && (

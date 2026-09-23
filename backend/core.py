@@ -64,11 +64,21 @@ MEDIUM_ALIASES: Dict[str, str] = {
     "jr college":     "Junior College",
     "jr. college":    "Junior College",
 }
-JC_STREAMS = {"arts", "commerce", "science", "electronics", "fisheries", "sci fisheries", "sci. fisheries"}
+JC_STREAMS = {"arts", "commerce", "science", "bi-focal", "bifocal", "bi focal", "electronics", "fisheries", "sci fisheries", "sci. fisheries"}
 JC_STREAM_CANONICAL = {
     "arts": "Arts", "commerce": "Commerce", "science": "Science",
-    "electronics": "Electronics", "fisheries": "Fisheries",
-    "sci fisheries": "Fisheries", "sci. fisheries": "Fisheries",
+    # "Bi-Focal" is the correct name (matches the Junior College department's
+    # own header text "ARTS, COMMERCE, SCIENCE & BI-FOCAL" and the
+    # authoritative FeeHub_Receipt_Types.pdf mapping already encoded in
+    # eligible_receipt_codes_for_class() below). "electronics" and every
+    # "fisheries" variant are accepted here only as legacy input synonyms so
+    # older import files/typed values still canonicalize correctly — neither
+    # is ever the stored/displayed value. (Previously "fisheries" mapped to
+    # itself instead of "Bi-Focal", which would have let a fresh import
+    # re-introduce the non-canonical "Fisheries" stream this app otherwise
+    # fully migrated away from — fixed here, not just for existing records.)
+    "bi-focal": "Bi-Focal", "bifocal": "Bi-Focal", "bi focal": "Bi-Focal", "electronics": "Bi-Focal",
+    "fisheries": "Bi-Focal", "sci fisheries": "Bi-Focal", "sci. fisheries": "Bi-Focal",
 }
 
 def canonical_medium(raw: str) -> Optional[str]:
@@ -128,6 +138,197 @@ def now_iso() -> str:
 def gen_id() -> str:
     return str(uuid.uuid4())
 
+# -----------------------------------------------------------------------------
+# Receipt eligibility engine — SINGLE SOURCE OF TRUTH for which receipt type(s)
+# a student's actual class/medium/stream qualifies for, per the authoritative
+# FeeHub_Receipt_Types.pdf mapping. Used by: receipt creation validation
+# (routers/receipts.py), the eligible-receipt-types lookup endpoint (routers/
+# students.py), and CSV export — so the same rule can never drift between
+# those three call sites. Pure function: no DB access, no side effects.
+#
+# Deliberately does NOT decide BUS or EMJC/DV — those are handled by callers:
+#   BUS depends on the student's bus_required flag, not class/medium/stream.
+#   EMJC is intentionally broad-by-design (per its own applicable_dept_codes
+#     in the receipt_types collection) and must never be auto-preferred over
+#     a more specific match — callers should treat it as an always-available
+#     manual alternative, never the auto-suggested primary.
+#   DV (Debit Voucher) is Finance/Petty Cash, not a student academic receipt.
+# -----------------------------------------------------------------------------
+import re as _re
+
+def _class_number(class_name: str):
+    """Extract the numeric class from a name like 'Class 5' / 'Class 11 - Science'. None if not numeric (Nursery, KG, Shishuvihar, etc.)."""
+    m = _re.search(r"class\s*(\d+)", (class_name or ""), _re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+def eligible_receipt_codes_for_class(class_name: str, medium: str, stream: str = None):
+    """
+    Returns (eligible_codes: list[str], notes: list[str]) based purely on the
+    authoritative mapping. Does not know about department scoping or bus
+    status — callers intersect with receipt_types.applicable_dept_codes and
+    layer on the bus_required check separately.
+    """
+    cn = (class_name or "").strip().lower()
+    med = (medium or "").strip().lower()
+    st = (stream or "").strip().lower()
+    n = _class_number(class_name)
+    eligible = []
+    notes = []
+
+    # EP — Nursery, K.G.1, K.G.2 only (not a class-number range)
+    if cn in ("nursery", "k.g.1", "kg 1", "kg i", "kg1", "lkg",
+              "k.g.2", "kg 2", "kg ii", "kg2", "ukg"):
+        eligible.append("EP")
+
+    # MP — Shishuvihar/Balwadi by name, or Classes 1-8 Marathi Medium
+    if cn in ("senior shishuvihar", "junior shishuvihar", "balwadi"):
+        eligible.append("MP")
+    elif n is not None and 1 <= n <= 8 and "marathi" in med:
+        eligible.append("MP")
+
+    # EMP — Classes 1-10 English Medium
+    if n is not None and 1 <= n <= 10 and "english" in med:
+        eligible.append("EMP")
+
+    # SEC — Classes 9 & 10 Marathi Medium
+    if n is not None and n in (9, 10) and "marathi" in med:
+        eligible.append("SEC")
+
+    # JC / JCACS — Classes 11 & 12. JC is the school-wide rule for ALL Class
+    # 11/12 students regardless of stream (Arts/Commerce/Science/Bi-Focal or
+    # anything else) — the Student Profile -> New Receipt flow always routes
+    # here. JCACS is ADDITIONALLY eligible for the four canonical streams so
+    # it stays valid for manual selection and any existing/historical
+    # receipts filed under it — it is never removed, just no longer the
+    # default. "electronics"/"fisheries" are matched too as a defensive
+    # legacy fallback (old data occasionally used those labels before they
+    # were corrected to "Bi-Focal") so this never regresses even if a stray
+    # value slips through elsewhere.
+    if n is not None and n in (11, 12):
+        eligible.append("JC")
+        if st in ("arts", "commerce", "science", "bifocal", "bi-focal", "bi focal", "electronics", "fisheries"):
+            eligible.append("JCACS")
+        elif st:
+            notes.append(f"stream '{stream}' is not one of the PDF's listed JCACS streams (Arts/Commerce/Science/Bi-Focal) — JC applies")
+
+    return eligible, notes
+
+# -----------------------------------------------------------------------------
+# Per-student fee/installment overrides (Option A — approved). A student_fee_
+# overrides document says "for THIS student, THIS academic year, THIS fee
+# head, the total is X, optionally split into 1-4 installments with due
+# dates" — layered on top of the shared fee_structures.items[] the rest of
+# the school uses. Payment itself is completely unchanged: a cashier still
+# just pays against a named fee_head_name line via the existing
+# create_receipt() path, and paid/outstanding is still derived live from real
+# receipts (never a stored, independently-editable status) - this function
+# only decides WHICH items (shared or overridden) a student's ledger shows.
+# -----------------------------------------------------------------------------
+def validate_installments(total_amount: float, installments: list):
+    """Raises ValueError with a clear message on any problem. Returns nothing on success."""
+    if not (1 <= len(installments) <= 4):
+        raise ValueError("Between 1 and 4 installments are required")
+    total = 0.0
+    for idx, inst in enumerate(installments):
+        try:
+            amt = float(inst.get("amount"))
+        except (TypeError, ValueError, AttributeError):
+            raise ValueError(f"Installment {idx+1}: amount must be a number")
+        if amt <= 0:
+            raise ValueError(f"Installment {idx+1}: amount must be positive")
+        due = str(inst.get("due_date") or "").strip()
+        if not due:
+            raise ValueError(f"Installment {idx+1}: due date is required")
+        total += amt
+    if abs(total - float(total_amount)) > 0.01:
+        raise ValueError(f"Installment amounts (₹{total:,.2f}) must total exactly the fee amount (₹{float(total_amount):,.2f})")
+
+def compute_fee_items(fs_items: list, overrides: list, receipts: list) -> list:
+    """The SINGLE shared computation of 'what does this student owe, per fee
+    head/installment' — used by the student ledger endpoint, the Live Fee
+    Update listing, and CSV export, so there is exactly one place this logic
+    lives (never three copies that could drift apart). Pure function: no DB
+    access. paid/outstanding/status are always derived from `receipts`
+    (real, already-created receipt documents) — never a stored status field.
+    """
+    overridden_kinds = set()
+    overridden_names = set()
+    for ov in overrides:
+        head_norm = (ov.get("fee_head_name") or "").strip().lower()
+        overridden_names.add(head_norm)
+        overridden_kinds.add(head_norm[:-4].strip() if head_norm.endswith(" fee") else head_norm)
+
+    paid_by_name: Dict[str, float] = {}
+    for r in receipts:
+        if r.get("receipt_type") in ("refund", "debit_voucher"):
+            continue
+        for line in (r.get("lines") or []):
+            key = (line.get("fee_head_name") or "").strip().lower()
+            paid_by_name[key] = paid_by_name.get(key, 0) + float(line.get("amount") or 0)
+
+    def _status(total: float, paid: float) -> str:
+        if total > 0 and paid >= total - 0.01: return "paid"
+        if paid > 0: return "partial"
+        return "unpaid"
+
+    fee_items = []
+    for it in (fs_items or []):
+        kind_norm = (it.get("kind") or "").strip().lower()
+        name_norm = (it.get("fee_head_name") or "").strip().lower()
+        if (kind_norm and kind_norm in overridden_kinds) or name_norm in overridden_names:
+            continue
+        total = float(it.get("amount") or 0)
+        paid = paid_by_name.get(name_norm, 0)
+        fee_items.append({
+            "fee_head_name": it.get("fee_head_name"), "total": total, "paid": paid,
+            "outstanding": max(0, round(total - paid, 2)), "due_date": it.get("due_date"),
+            "installment_no": None, "status": _status(total, paid), "source": "shared",
+        })
+    for ov in overrides:
+        if ov.get("installments"):
+            for inst in ov["installments"]:
+                label = f"{ov['fee_head_name']} - Installment {inst['installment_no']}"
+                total = float(inst["amount"])
+                paid = paid_by_name.get(label.strip().lower(), 0)
+                fee_items.append({
+                    "fee_head_name": label, "total": total, "paid": paid,
+                    "outstanding": max(0, round(total - paid, 2)), "due_date": inst.get("due_date"),
+                    "installment_no": inst["installment_no"], "status": _status(total, paid), "source": "override",
+                })
+        else:
+            total = float(ov["total_amount"])
+            paid = paid_by_name.get(ov["fee_head_name"].strip().lower(), 0)
+            fee_items.append({
+                "fee_head_name": ov["fee_head_name"], "total": total, "paid": paid,
+                "outstanding": max(0, round(total - paid, 2)), "due_date": None,
+                "installment_no": None, "status": _status(total, paid), "source": "override",
+            })
+    return fee_items
+
+def apply_opening_paid(fee_items: list, opening_paid: float):
+    """Fills a pre-go-live opening-paid amount (from the fee_details
+    collection — a real, admin-verified figure imported with a per-row audit
+    trail, NEVER a fake receipt) into a per-head fee_items breakdown,
+    oldest/first head first, until exhausted. Returns (adjusted_items,
+    unabsorbed_remainder) — the remainder is never dropped, the caller adds
+    it at the ledger-total level, so the headline "Paid" figure always equals
+    live-receipts-paid + the full opening_paid even if it doesn't fit inside
+    current heads (e.g. the fee structure changed since the historical
+    payment). Shared by the student ledger and the Live Fee Update grid so
+    both screens agree on the same student's paid amount."""
+    remaining = float(opening_paid or 0)
+    out = []
+    for it in fee_items:
+        it = dict(it)
+        if remaining > 0.004 and it["outstanding"] > 0:
+            take = min(remaining, it["outstanding"])
+            it["paid"] = round(it["paid"] + take, 2)
+            it["outstanding"] = round(it["outstanding"] - take, 2)
+            it["status"] = "paid" if it["outstanding"] <= 0.01 else ("partial" if it["paid"] > 0 else "unpaid")
+            remaining -= take
+        out.append(it)
+    return out, max(0.0, round(remaining, 2))
+
 def hash_password(p: str) -> str:
     return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
 
@@ -137,9 +338,9 @@ def verify_password(p: str, h: str) -> bool:
     except Exception:
         return False
 
-def create_access_token(user_id: str, email: str, role: str) -> str:
+def create_access_token(user_id: str, email: str, role: str, token_version: int = 0) -> str:
     payload = {
-        "sub": user_id, "email": email, "role": role,
+        "sub": user_id, "email": email, "role": role, "tv": token_version,
         "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_MIN),
         "type": "access",
     }
@@ -149,15 +350,20 @@ def clean(doc: dict) -> dict:
     if not doc: return doc
     doc.pop('_id', None)
     doc.pop('password_hash', None)
+    doc.pop('pin_hash', None)
     return doc
 
-# ---------------- Auth deps ----------------
-async def get_current_user(request: Request) -> dict:
+def _extract_token(request: Request) -> Optional[str]:
     token = request.cookies.get("access_token")
     if not token:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             token = auth[7:]
+    return token
+
+# ---------------- Auth deps ----------------
+async def get_current_user(request: Request) -> dict:
+    token = _extract_token(request)
     if not token:
         raise HTTPException(401, "Not authenticated")
     try:
@@ -169,7 +375,32 @@ async def get_current_user(request: Request) -> dict:
     user = await db.users.find_one({"id": payload["sub"]})
     if not user:
         raise HTTPException(401, "User not found")
+    if not user.get("active", True):
+        raise HTTPException(401, "Account disabled")
+    # Session revocation: logout (and any future forced-revocation action) bumps
+    # the user's token_version, which invalidates every token issued before that
+    # point - even ones still within their normal expiry window. A token issued
+    # before this field existed has no "tv" claim, which defaults to 0 and matches
+    # a user with no token_version field yet (also defaults to 0), so upgrading to
+    # this check does not retroactively log anyone out.
+    if payload.get("tv", 0) != user.get("token_version", 0):
+        raise HTTPException(401, "Session expired, please log in again")
     return clean(user)
+
+async def revoke_current_session(request: Request) -> None:
+    """Best-effort session revocation for logout: if the request carries a token
+    (even one already expired), bump that user's token_version so it - and any
+    other outstanding token for that user - is rejected by get_current_user from
+    now on. Never raises: logout must always succeed from the caller's point of
+    view even if there was no valid token to revoke in the first place."""
+    token = _extract_token(request)
+    if not token:
+        return
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO], options={"verify_exp": False})
+        await db.users.update_one({"id": payload["sub"]}, {"$inc": {"token_version": 1}})
+    except Exception:
+        pass
 
 def _local_machine_ips() -> set:
     """The Main Server's own IP addresses (loopback + every real NIC address), computed once
@@ -245,16 +476,65 @@ async def require_admin_dual(
         raise HTTPException(403, "Invalid administrator password")
     return user
 
+# ---------------- Receipt deletion PIN gate ----------------
+# A fixed, hashed, system-wide second factor for the one genuinely destructive
+# receipt operation (hard delete, as opposed to cancel/void which keeps the
+# record). Deliberately NOT stored on the `settings` document - /api/settings
+# (routers/auth.py: read_settings) returns that whole document to any
+# authenticated user, which would leak this hash to every role. Stored instead
+# in its own collection that no GET route anywhere ever returns. Never logs
+# the PIN itself - only the pass/fail outcome and a reason code.
+RECEIPT_DELETE_PIN_DOC_ID = "receipt_delete_pin"
+
+async def require_receipt_delete_pin(
+    rid: str,
+    x_receipt_delete_pin: Optional[str] = Header(None),
+    user = Depends(require_roles("administrator", "manager")),
+):
+    doc = await db.security_config.find_one({"id": RECEIPT_DELETE_PIN_DOC_ID})
+    if not doc or not doc.get("pin_hash"):
+        await audit(user, "receipt_delete_failed", "receipt", rid, {"reason": "pin_not_configured"})
+        raise HTTPException(500, "Receipt deletion PIN is not configured on the server")
+    if not x_receipt_delete_pin:
+        await audit(user, "receipt_delete_failed", "receipt", rid, {"reason": "missing_pin"})
+        raise HTTPException(401, "Deletion PIN required")
+    if not verify_password(x_receipt_delete_pin, doc["pin_hash"]):
+        await audit(user, "receipt_delete_failed", "receipt", rid, {"reason": "invalid_pin"})
+        raise HTTPException(403, "Invalid deletion PIN")
+    return user
+
+# ---------------- Fee-edit access approval PIN gate ----------------
+# Reuses the SAME system-wide Master PIN/hash as require_receipt_delete_pin
+# above (RECEIPT_DELETE_PIN_DOC_ID) - deliberately never a second, separate
+# PIN to configure/remember. Only the header name and audit action differ so
+# the audit trail reads clearly for this action.
+async def require_fee_edit_access_pin(
+    req_id: str,
+    x_fee_edit_access_pin: Optional[str] = Header(None),
+    user = Depends(require_roles("administrator", "manager")),
+):
+    doc = await db.security_config.find_one({"id": RECEIPT_DELETE_PIN_DOC_ID})
+    if not doc or not doc.get("pin_hash"):
+        await audit(user, "fee_edit_access_approve_failed", "fee_edit_access", req_id, {"reason": "pin_not_configured"})
+        raise HTTPException(500, "Master PIN is not configured on the server")
+    if not x_fee_edit_access_pin:
+        await audit(user, "fee_edit_access_approve_failed", "fee_edit_access", req_id, {"reason": "missing_pin"})
+        raise HTTPException(401, "Master PIN required")
+    if not verify_password(x_fee_edit_access_pin, doc["pin_hash"]):
+        await audit(user, "fee_edit_access_approve_failed", "fee_edit_access", req_id, {"reason": "invalid_pin"})
+        raise HTTPException(403, "Invalid Master PIN")
+    return user
+
 # ---------------- Settings helpers ----------------
 async def get_settings_doc():
     doc = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0})
     if not doc:
         doc = {
             "id": SETTINGS_ID,
-            "school_name": "Balaji Convent & Junior College",
-            "school_address": "Butibori, Nagpur",
-            "school_phone": "",
-            "school_email": "",
+            "school_name": "Balaji Convent",
+            "school_address": "Teacher's Colony, Butibori, Nagpur-441108",
+            "school_phone": "9765861493",
+            "school_email": "balajiconventjuniorcollege@gmail.com",
             "school_website": "",
             "receipt_footer": "This is a computer-generated receipt.",
             "notice_footer": "Fee counter timing: 9:00 AM – 3:00 PM (Monday to Saturday). Modes accepted: Cash / Cheque / DD / UPI / NEFT.",
@@ -355,6 +635,11 @@ class ClassIn(BaseModel):
     department_id: str
     name: str
     section: Optional[str] = None
+    medium: Optional[str] = None
+    # JC only - Arts/Commerce/Science/Bi-Focal. Canonicalized server-side so
+    # this generic admin "New Class" form can never create a non-canonical
+    # stream name (e.g. "Fisheries") the way the old seed data once did.
+    stream: Optional[str] = None
 
 class FeeHeadIn(BaseModel):
     name: str
@@ -386,7 +671,7 @@ class StudentIn(BaseModel):
     admission_category: Optional[str] = None
     admission_date: Optional[str] = None
     medium: Optional[str] = None            # canonical: English Medium / Semi Medium (Marathi) / Junior College
-    stream: Optional[str] = None            # JC only: Arts / Commerce / Science / Electronics / Fisheries
+    stream: Optional[str] = None            # JC only: Arts / Commerce / Science / Bi-Focal (legacy: Fisheries)
     first_year_in_college: bool = False     # drives "new 12th admission" fee variant
 
 class ReceiptLineIn(BaseModel):
@@ -422,12 +707,73 @@ class AdjustmentIn(BaseModel):
     reason: str
     fee_head_id: Optional[str] = None
 
-class ExtensionIn(BaseModel):
+class ExtensionCreateIn(BaseModel):
+    """Stage 1 (Cashier): search student -> auto-filled snapshot -> reason -> PRINT.
+    No installment amounts are collected here - the printed application shows them
+    BLANK, to be hand-written and signed on the physical paper (see ExtensionApproveIn
+    for stage 2, where the cashier transcribes the signed paper back into FeeHub)."""
     student_id: str
-    outstanding_amount: float
-    installments: List[Dict[str, Any]]
-    application_note: Optional[str] = None
-    scanned_url: Optional[str] = None
+    reason: str
+
+class ExtensionInstallmentIn(BaseModel):
+    amount: float
+    due_date: str
+
+class ExtensionApproveIn(BaseModel):
+    """Stage 2 (Cashier, after the physically-signed paper returns): the installment
+    amounts/dates as actually written and signed by the school authority - never
+    invented, never pre-filled. `confirmed` must be explicitly true, mirroring the
+    UI's "Signed approval received from school authority?" confirmation."""
+    installments: List[ExtensionInstallmentIn]
+    confirmed: bool = False
+
+# ---------------- Offline-first client sync ----------------
+class DeviceHeartbeatIn(BaseModel):
+    """Sent periodically by a Client PC (~30-60s interval, never aggressive)
+    so Admin's Connected PCs screen can show real online/offline status. The
+    device_id is a UUID the client generates once and persists locally -
+    stable across friendly-name renames, app restarts, and even a different
+    logged-in user on the same PC."""
+    device_id: str
+    app_version: Optional[str] = None
+    pending_count: int = 0
+
+class DeviceRenameIn(BaseModel):
+    friendly_name: str
+
+class SyncOperationIn(BaseModel):
+    """One queued offline action. `local_id` is a client-generated UUID and is
+    the ONLY thing that makes sync idempotent: retrying the exact same
+    local_id (e.g. after a dropped connection mid-sync) must never create a
+    second receipt - the server looks it up in `sync_operations` first and
+    replays the original result instead of re-applying the operation."""
+    local_id: str
+    op_type: Literal["create_receipt", "create_expense", "create_bill"]
+    payload: Dict[str, Any]
+    client_created_at: str
+
+class SyncPushIn(BaseModel):
+    device_id: str
+    operations: List[SyncOperationIn]
+
+# ---------------- Temporary class-level fee-edit access ----------------
+# A Cashier cannot edit fees directly (that stays role-gated to
+# administrator/manager/accountant) and is never given the Master PIN. This
+# lets a Cashier request a narrow, time-boxed exception instead: a specific
+# class/medium + fee scope (school/bus/both), on the requesting PC only,
+# approved by an Admin/Manager who enters the Master PIN. Nothing here
+# touches the underlying fee-edit endpoint's own business logic - it only
+# decides WHO may call it and for WHICH students, for a limited time.
+class FeeEditAccessRequestIn(BaseModel):
+    device_id: str
+    class_id: str
+    class_name: Optional[str] = None
+    medium: Optional[str] = None
+    scope: Literal["school", "bus", "both"]
+    reason: str
+
+class FeeEditAccessApproveIn(BaseModel):
+    duration_minutes: int = 30
 
 class ReminderFollowupIn(BaseModel):
     reminder_id: str
@@ -497,6 +843,28 @@ async def next_fee_adjustment_number(academic_year: str) -> str:
     seq = doc.get("seq", 1) if doc else 1
     return f"FA-{academic_year.split('-')[0]}-{seq:05d}"
 
+async def next_expense_number(academic_year: str) -> str:
+    """EXP-2026-00001 - a fully independent counter key/sequence from receipts,
+    vouchers and FA numbers, so the new Expense module can never collide with
+    or consume any existing receipt-numbering sequence."""
+    key = f"EXP-{academic_year}"
+    doc = await db.counters.find_one_and_update(
+        {"key": key}, {"$inc": {"seq": 1}}, upsert=True, return_document=True,
+    )
+    seq = doc.get("seq", 1) if doc else 1
+    return f"EXP-{academic_year.split('-')[0]}-{seq:05d}"
+
+async def next_bill_number(academic_year: str) -> str:
+    """BILL-2026-00001 - independent counter, same reasoning as next_expense_number.
+    Bill Entry is a separate accounting/document-record module; it must never
+    touch or reuse the receipt/expense numbering sequences."""
+    key = f"BILL-{academic_year}"
+    doc = await db.counters.find_one_and_update(
+        {"key": key}, {"$inc": {"seq": 1}}, upsert=True, return_document=True,
+    )
+    seq = doc.get("seq", 1) if doc else 1
+    return f"BILL-{academic_year.split('-')[0]}-{seq:05d}"
+
 def amount_in_words_inr(n: float) -> str:
     n = int(round(n))
     if n == 0: return "Zero Rupees Only"
@@ -524,7 +892,7 @@ def amount_in_words_inr(n: float) -> str:
 DEFAULT_RECEIPT_TYPES = [
     {"code":"EP",     "name":"Balaji Convent English Primary School",                 "department_name":"English Primary Section",              "category":"school", "description":"Fees for Class 1–4 (English medium)",              "icon":"GraduationCap",   "display_order":10, "tabs":["school","installment","misc"]},
     {"code":"MP",     "name":"Balaji Convent Marathi Primary School",                 "department_name":"Marathi Primary Section",              "category":"school", "description":"Fees for इयत्ता १–४ (मराठी माध्यम)",             "icon":"BookOpen",        "display_order":20, "tabs":["school","installment","misc"]},
-    {"code":"EMP",    "name":"Balaji Convent English & Marathi Primary School",       "department_name":"English + Marathi Primary (Combined)", "category":"school", "description":"Combined receipt when a family pays for both mediums", "icon":"GraduationCap", "display_order":30, "tabs":["school","installment","misc"]},
+    {"code":"EMP",    "name":"Balaji Convent English Primary School",                 "department_name":"English Primary Section (Classes 1-10)", "category":"school", "description":"Fees for Classes 1-10 (English medium)",         "icon":"GraduationCap", "display_order":30, "tabs":["school","installment","misc"]},
     {"code":"SEC",    "name":"Balaji Convent Secondary School (Self Financing)",     "department_name":"Secondary Section",                    "category":"school", "description":"Class 5–10 self-financing",                         "icon":"Award",           "display_order":40, "tabs":["school","installment","misc"]},
     {"code":"JC",     "name":"Balaji Convent Junior College",                          "department_name":"Junior College",                       "category":"school", "description":"XI–XII, all standard streams",                       "icon":"GraduationCap",   "display_order":50, "tabs":["school","installment","misc"]},
     {"code":"JCACS",  "name":"Balaji Convent JC (Arts, Commerce, Science & Bifocal)","department_name":"Junior College — ACS/Bifocal",         "category":"school", "description":"XI–XII with bifocal & specialised streams",         "icon":"Award",           "display_order":60, "tabs":["school","installment","misc"]},
@@ -621,6 +989,21 @@ async def seed_data():
     await db.receipts.create_index("number", unique=True)
     await db.counters.create_index("key", unique=True)
     await db.fee_adjustment_applications.create_index("application_no", unique=True)
+    # Idempotent offline sync: a unique index on local_id is the hard, DB-level
+    # guarantee that retrying the same queued operation (e.g. after a dropped
+    # connection mid-sync) can never apply twice - a duplicate insert attempt
+    # fails outright rather than silently creating a second receipt.
+    await db.sync_operations.create_index("local_id", unique=True)
+    await db.devices.create_index("id", unique=True)
+
+    # Receipt deletion PIN - seeded ONCE, on first setup only (same "never touch
+    # it again here" rule as the admin account below, for the same reason: a
+    # future change to this PIN must never be silently reverted by a restart).
+    if not await db.security_config.find_one({"id": RECEIPT_DELETE_PIN_DOC_ID}):
+        await db.security_config.insert_one({
+            "id": RECEIPT_DELETE_PIN_DOC_ID, "pin_hash": hash_password("1618"),
+            "created_at": now_iso(),
+        })
 
     # Seed the admin account from .env on FIRST setup only. Once the account exists, its
     # password belongs to whoever is running the school - never touch it again here, or

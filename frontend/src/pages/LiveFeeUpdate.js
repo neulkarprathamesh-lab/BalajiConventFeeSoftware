@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
 import { Download, Lock, KeyRound } from 'lucide-react';
 import { getDeviceId } from '@/lib/syncEngine';
+import useLiveRefresh from '@/lib/useLiveRefresh';
 
 /**
  * Live Fee Update — one fee head at a time (a dropdown, not a multi-select
@@ -98,6 +99,10 @@ export default function LiveFeeUpdate() {
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [academicYear, classId, section, medium, stream, departmentId, selectedHead]);
+  // Safe to auto-refresh: "Updated Fee"/"Reason" inputs are bound to the
+  // separate edits/reasons state below, not to a row's live data, so a
+  // background reload of `rows` never clobbers an in-progress typed edit.
+  useLiveRefresh(load, 10000);
 
   const headEditable = selectedHead && selectedHead !== 'Bus Fee' && selectedHead !== 'Previous Year Balance';
   const canEditHead = canWrite && headEditable;
@@ -164,7 +169,7 @@ export default function LiveFeeUpdate() {
           <Field label="Class">
             <select value={classId} onChange={e => setClassId(e.target.value)} className="h-9 px-2 border border-slate-300 rounded text-sm">
               <option value="">All</option>
-              {classes.map(c => <option key={c.id} value={c.id}>{c.name}{c.medium ? ` · ${c.medium}` : ''}{c.stream ? ` · ${c.stream}` : ''}</option>)}
+              {classes.filter(c => !['Fisheries', 'Electronics'].includes(c.stream)).map(c => <option key={c.id} value={c.id}>{c.name}{c.medium ? ` · ${c.medium}` : ''}{c.stream ? ` · ${c.stream}` : ''}</option>)}
             </select>
           </Field>
           <Field label="Section"><input value={section} onChange={e => setSection(e.target.value)} className="h-9 px-2 border border-slate-300 rounded text-sm w-20" /></Field>
@@ -289,7 +294,7 @@ function RequestAccessModal({ classes, deviceId, onClose, onSubmitted }) {
           <Field label="Class">
             <select value={classId} onChange={e => setClassId(e.target.value)} required className="w-full h-10 px-2 border border-slate-300 rounded text-sm bg-white" data-testid="fea-class">
               <option value="">Select class</option>
-              {classes.map(c => <option key={c.id} value={c.id}>{c.name}{c.medium ? ` · ${c.medium}` : ''}{c.stream ? ` · ${c.stream}` : ''}</option>)}
+              {classes.filter(c => !['Fisheries', 'Electronics'].includes(c.stream)).map(c => <option key={c.id} value={c.id}>{c.name}{c.medium ? ` · ${c.medium}` : ''}{c.stream ? ` · ${c.stream}` : ''}</option>)}
             </select>
           </Field>
           <Field label="Medium (optional)">

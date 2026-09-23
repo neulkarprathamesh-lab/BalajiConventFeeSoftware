@@ -5,7 +5,7 @@ from core import (
     db, ACCESS_MIN, LoginIn, ProfileUpdate, PinSetIn, PinVerifyIn, UserCreate,
     audit, clean, get_current_user, get_settings_doc, require_roles,
     hash_password, verify_password, create_access_token, now_iso, gen_id, SETTINGS_ID,
-    APP_ROOT, is_server_local_request,
+    APP_ROOT, is_server_local_request, revoke_current_session,
 )
 
 router = APIRouter(prefix="/api", tags=["auth"])
@@ -22,13 +22,14 @@ async def login(body: LoginIn, response: Response, request: Request):
     if user["role"] == "administrator" and not is_server_local_request(request):
         await audit(clean(user), "login_blocked_remote", "auth", user["id"], {"client_ip": request.client.host if request.client else None})
         raise HTTPException(403, "Administrator accounts can only sign in from the Main Server itself, not over the network.")
-    token = create_access_token(user["id"], user["email"], user["role"])
+    token = create_access_token(user["id"], user["email"], user["role"], user.get("token_version", 0))
     response.set_cookie("access_token", token, httponly=True, secure=True, samesite="none", max_age=ACCESS_MIN*60, path="/")
     await db.users.update_one({"id": user["id"]}, {"$set": {"last_login": now_iso()}})
     return {"token": token, "user": clean(user)}
 
 @router.post("/auth/logout")
-async def logout(response: Response):
+async def logout(response: Response, request: Request):
+    await revoke_current_session(request)
     response.delete_cookie("access_token", path="/")
     return {"ok": True}
 
@@ -165,7 +166,7 @@ async def update_settings(body: Dict[str, Any], user = Depends(require_roles("ad
 # ---------- Users (admin) ----------
 @router.get("/users")
 async def list_users(user = Depends(require_roles("administrator"))):
-    return await db.users.find({}, {"password_hash":0, "_id":0}).to_list(500)
+    return await db.users.find({}, {"password_hash":0, "pin_hash":0, "_id":0}).to_list(500)
 
 @router.post("/users")
 async def create_user(body: UserCreate, user = Depends(require_roles("administrator"))):

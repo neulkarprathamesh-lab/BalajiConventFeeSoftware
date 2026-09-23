@@ -46,7 +46,12 @@ export default function FeeStructure() {
     api.get('/fee-structures').then(r => setStructures(r.data));
   }, []);
 
-  const availClasses = classes.filter(c => c.department_id === dept);
+  // Legacy stream names ("Fisheries"/"Electronics") are never a valid NEW
+  // selection - Bi-Focal is the sole canonical student-facing name for that
+  // combined stream (same rule as AssignStudents.js/Promotion.js). The
+  // underlying class/fee_structure documents are left alone.
+  const LEGACY_STREAMS = ['Fisheries', 'Electronics'];
+  const availClasses = classes.filter(c => c.department_id === dept && !LEGACY_STREAMS.includes(c.stream));
   const total = items.reduce((s,i)=>s+(parseFloat(i.amount)||0),0);
 
   const addItem = () => setItems([...items, { fee_head_id:'', amount:0 }]);
@@ -241,7 +246,7 @@ function DuplicateModal({ src, classes, depts, onClose, onDone }) {
           <label className="block"><div className="text-[11px] uppercase tracking-wide text-slate-600 mb-1">Target Class *</div>
             <select required className="w-full h-9 px-3 border border-slate-300 rounded text-sm bg-white" value={toClass} onChange={e=>setToClass(e.target.value)}>
               <option value="">Select…</option>
-              {classes.filter(c => c.id !== src.class_id).map(c => {
+              {classes.filter(c => c.id !== src.class_id && !['Fisheries', 'Electronics'].includes(c.stream)).map(c => {
                 const d = depts.find(x => x.id === c.department_id);
                 return <option key={c.id} value={c.id}>{d?.name} · {c.name}{c.stream ? ` · ${c.stream}` : ''}</option>;
               })}

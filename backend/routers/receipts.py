@@ -282,7 +282,12 @@ async def create_receipt(body: ReceiptIn, user = Depends(require_roles("administ
 
     # ---- Business rules ---------------------------------------------------
     # Admission Fee is a one-time-only line per student per academic year.
-    # Continuation Fee must be paid in full — no partial payments allowed.
+    # School-fee payments are validated purely against the student's live
+    # total outstanding (same ledger the receipt screen shows), never
+    # against individual fee-head amounts: any amount up to and including
+    # the full outstanding is a legitimate payment and is accepted with
+    # auto-allocation across lines exactly as entered; only an amount that
+    # would exceed the outstanding is rejected.
     if student:
         line_names = {(l.fee_head_name or "").strip().lower() for l in body.lines}
         ay_now = dept.get("academic_year", "2026-27")
@@ -294,43 +299,22 @@ async def create_receipt(body: ReceiptIn, user = Depends(require_roles("administ
             ).to_list(5)
             if prior:
                 raise HTTPException(409, f"Admission Fee for {student['name']} was already collected on receipt {prior[0]['number']} — it cannot be charged again.")
-        # Live outstanding, computed once from the same ledger the receipt
-        # screen itself shows (student_ledger - school + bus + prior-year
-        # balance). Reused below for two generic, student/amount-agnostic
-        # rules: (a) a payment that exactly clears the full outstanding is
-        # always accepted even if it doesn't fill every individual fee-head
-        # line the way a rule like Continuation Fee's would otherwise
-        # require, and (b) a payment that would collect more than what is
-        # actually owed is rejected outright.
-        current_outstanding = None
         if body.receipt_type == "school":
             from routers import students as students_router
             current_ledger = await students_router.student_ledger(body.student_id, user)
-            current_outstanding = round(float(current_ledger.get("outstanding", 0)), 2)
+            # A negative outstanding (e.g. a credit carried forward in
+            # student_opening_balances) means nothing is currently owed -
+            # clamp at 0 for this comparison only, same convention the
+            # ledger itself already applies to school_payable, so a
+            # credit-balance student is never told a legitimate payment
+            # "exceeds" a negative number.
+            current_outstanding = max(0.0, round(float(current_ledger.get("outstanding", 0)), 2))
             if round(total, 2) - current_outstanding > 0.01:
                 raise HTTPException(
                     400,
                     f"Payment amount (₹{total:,.2f}) exceeds {student['name']}'s total outstanding "
                     f"balance (₹{current_outstanding:,.2f}). Please enter an amount up to the outstanding balance."
                 )
-        if "continuation fee" in line_names and student.get("fee_structure_id"):
-            fs = await db.fee_structures.find_one({"id": student["fee_structure_id"]}, {"_id":0})
-            expected = float(fs.get("continuation_fee", 0)) if fs else 0
-            paid_line = next((l for l in body.lines if (l.fee_head_name or "").strip().lower() == "continuation fee"), None)
-            if expected > 0 and paid_line and abs(float(paid_line.amount) - expected) > 0.01:
-                # A payment that exactly clears the student's ENTIRE current
-                # outstanding is always accepted regardless of how it happens
-                # to land on individual fee-head lines. This rule exists to
-                # stop a genuinely PARTIAL continuation-fee payment, not to
-                # reject a cashier who is collecting the full amount actually
-                # owed just because the allocation split under-covers this
-                # one line.
-                if current_outstanding is None:
-                    from routers import students as students_router
-                    current_ledger = await students_router.student_ledger(body.student_id, user)
-                    current_outstanding = round(float(current_ledger.get("outstanding", 0)), 2)
-                if abs(round(total, 2) - current_outstanding) > 0.01:
-                    raise HTTPException(400, f"Continuation Fee must be paid in full (₹{int(expected)}). Partial payments are not allowed.")
 
     if body.receipt_type in ("refund","debit_voucher"):
         if user["role"] not in ("administrator","manager"):
