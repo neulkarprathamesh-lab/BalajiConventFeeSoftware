@@ -1,14 +1,23 @@
 """Receipt Types (DB-backed) + Receipts + Adjustments + Extensions + Reminders + cancel/reprint."""
+import re
 from typing import Any, Dict, List, Optional, Literal
 from datetime import date, timedelta
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Response
 from core import (
-    db, ReceiptTypeIn, ReceiptIn, AdjustmentIn, ExtensionIn, ReminderFollowupIn,
+    db, ReceiptTypeIn, ReceiptIn, AdjustmentIn, ExtensionCreateIn, ExtensionApproveIn, ReminderFollowupIn,
     audit, gen_id, get_current_user, now_iso, require_roles,
-    require_admin_pin, require_admin_dual, get_settings_doc,
+    require_admin_pin, require_admin_dual, require_receipt_delete_pin, get_settings_doc,
     next_receipt_number, next_voucher_number, amount_in_words_inr,
     DEFAULT_RECEIPT_TYPES, _seed_receipt_types_if_empty,
+    eligible_receipt_codes_for_class,
 )
+
+# Receipt-type codes that are intentionally broad/special and exempt from the
+# class/medium/stream eligibility check below (they have their own separate
+# rules, already enforced elsewhere): EMJC is broad-by-design (per its own
+# applicable_dept_codes), BUS is governed by the bus_required check further
+# down, DV is Finance/Petty Cash and not a student academic receipt.
+_ELIGIBILITY_EXEMPT_CODES = {"EMJC", "BUS", "DV"}
 
 router = APIRouter(prefix="/api", tags=["receipts"])
 
@@ -231,7 +240,45 @@ async def create_receipt(body: ReceiptIn, user = Depends(require_roles("administ
     if body.student_id:
         student = await db.students.find_one({"id": body.student_id})
         if not student: raise HTTPException(400, "Invalid student")
+        # A receipt's department_id decides the numbering prefix and whose
+        # money this is - it must match the student's own actual department.
+        # This was previously unchecked: only the cosmetic receipt_type_id
+        # template was validated (below), so a cashier could file a Class 5
+        # student's payment under Junior College's department with no
+        # rejection at all. Debit vouchers/general receipts with no
+        # student_id are unaffected.
+        student_dept_id = student.get("department_id")
+        if student_dept_id and student_dept_id != body.department_id:
+            student_dept = await db.departments.find_one({"id": student_dept_id}, {"_id": 0, "name": 1})
+            raise HTTPException(
+                400,
+                f"{student['name']} belongs to {student_dept['name'] if student_dept else 'a different department'}, "
+                f"not {dept['name']}. Select the correct department for this student."
+            )
+        # A student without active bus facility must never receive a BUS receipt.
+        if body.receipt_type == "bus" and not student.get("bus_required"):
+            raise HTTPException(400, f"{student['name']} does not currently have an active bus facility — a BUS receipt cannot be issued.")
     total = sum(l.amount for l in body.lines)
+
+    # Independent backend guard (never trust the frontend alone): a BUS receipt
+    # can only ever collect what is actually owed in the student's real
+    # bus_charges records - this is what stops a school/tuition/admission fee
+    # from ever being smuggled through under receipt_type="bus", regardless of
+    # what lines the client sent. Never invents a charge - if bus_charges have
+    # not been generated for this student yet, real bus dues are ₹0 and the
+    # receipt is rejected rather than accepting an unverifiable amount.
+    if body.receipt_type == "bus" and student:
+        unpaid_charges = await db.bus_charges.find(
+            {"student_id": body.student_id, "status": {"$in": ["unpaid", "partial"]}}, {"_id": 0},
+        ).to_list(500)
+        bus_due = sum(max(0.0, float(c.get("amount", 0)) - float(c.get("amount_paid", 0))) for c in unpaid_charges)
+        if total - bus_due > 0.01:
+            raise HTTPException(
+                400,
+                f"This BUS receipt (₹{total:,.2f}) exceeds {student['name']}'s actual pending bus fee "
+                f"(₹{bus_due:,.2f}). A Bus Receipt can only collect real bus_charges dues, never school/"
+                f"tuition/admission/other fees."
+            )
 
     # ---- Business rules ---------------------------------------------------
     # Admission Fee is a one-time-only line per student per academic year.
@@ -252,41 +299,42 @@ async def create_receipt(body: ReceiptIn, user = Depends(require_roles("administ
             expected = float(fs.get("continuation_fee", 0)) if fs else 0
             paid_line = next((l for l in body.lines if (l.fee_head_name or "").strip().lower() == "continuation fee"), None)
             if expected > 0 and paid_line and abs(float(paid_line.amount) - expected) > 0.01:
-                raise HTTPException(400, f"Continuation Fee must be paid in full (₹{int(expected)}). Partial payments are not allowed.")
+                # A payment that exactly clears the student's ENTIRE current
+                # outstanding (school + bus + prior-year balance - the same
+                # live ledger the receipt screen itself shows) is always
+                # accepted regardless of how it happens to land on individual
+                # fee-head lines. This rule exists to stop a genuinely
+                # PARTIAL continuation-fee payment, not to reject a cashier
+                # who is collecting the full amount actually owed just
+                # because the allocation split under-covers this one line.
+                from routers import students as students_router
+                current_ledger = await students_router.student_ledger(body.student_id, user)
+                current_outstanding = round(float(current_ledger.get("outstanding", 0)), 2)
+                if abs(round(total, 2) - current_outstanding) > 0.01:
+                    raise HTTPException(400, f"Continuation Fee must be paid in full (₹{int(expected)}). Partial payments are not allowed.")
 
     if body.receipt_type in ("refund","debit_voucher"):
         if user["role"] not in ("administrator","manager"):
             raise HTTPException(403, "Refund/voucher requires manager or admin")
     ay = dept.get("academic_year", "2026-27")
-    if body.receipt_type == "debit_voucher":
-        number = await next_voucher_number(ay)
-    else:
-        number = await next_receipt_number(dept["code"], ay)
-    rid = gen_id()
-    # Rich student snapshot so receipts always self-describe (survives student edits)
-    snapshot = None
-    if student:
-        class_doc = await db.classes.find_one({"id": student.get("class_id")}, {"_id":0}) if student.get("class_id") else None
-        fs_doc = await db.fee_structures.find_one({"id": student.get("fee_structure_id")}, {"_id":0, "items":0}) if student.get("fee_structure_id") else None
-        snapshot = {
-            "admission_no": student["admission_no"], "name": student["name"],
-            "father_name": student.get("father_name"), "mother_name": student.get("mother_name"),
-            "guardian_mobile": student.get("guardian_mobile"),
-            "class_id": student.get("class_id"),
-            "class_name": class_doc.get("name") if class_doc else None,
-            "section": student.get("section"), "roll_no": student.get("roll_no"),
-            "medium": student.get("medium"), "stream": student.get("stream"),
-            "bus_stop_no": student.get("bus_stop_no"),
-            "bus_stop_name": student.get("bus_stop_name"),
-            "bus_main_area": student.get("bus_main_area"),
-            "academic_year": student.get("academic_year") or ay,
-            "fee_structure_name": (f"{fs_doc.get('medium')} · {fs_doc.get('class_name')}"
-                                    + (f" · {fs_doc.get('stream')}" if fs_doc and fs_doc.get('stream') else "")) if fs_doc else None,
-        }
+
+    # class_doc is needed by the receipt-type eligibility check below, and is
+    # reused again further down when building the student snapshot - fetched
+    # once, here, before any receipt number is generated.
+    class_doc = await db.classes.find_one({"id": student.get("class_id")}, {"_id": 0}) if student and student.get("class_id") else None
+
     # Explicit receipt-TEMPLATE selection (EP/MP/SEC/JC/JC-ACS/EMP/EMJC/BUS/V) is
     # independent of receipt_type (business rules) and department_id (whose money
     # this is), but it must still make sense for that student - never let an
     # English Primary student's payment go out under a "Junior College" template.
+    #
+    # Deliberately validated BEFORE any receipt number is generated below: a
+    # receipt number is consumed from an atomic, never-reused counter, so if
+    # this check raised AFTER the number had already been drawn, every
+    # rejected receipt-type/eligibility mismatch would permanently burn a
+    # number that no receipt would ever use - a silent, avoidable gap in the
+    # sequence on every validation failure, not just on an actually-completed
+    # then later cancelled/deleted receipt.
     chosen_rt = None
     if body.receipt_type_id:
         chosen_rt = await db.receipt_types.find_one({"id": body.receipt_type_id}, {"_id": 0})
@@ -299,6 +347,59 @@ async def create_receipt(body: ReceiptIn, user = Depends(require_roles("administ
                 f"Receipt type '{chosen_rt.get('name')}' cannot be used for a {dept['name']} student "
                 f"(applies to: {', '.join(allowed_codes)}). Choose a matching receipt type."
             )
+        # Class/medium/stream eligibility (per the authoritative receipt-type
+        # mapping) — the check above only validated the department; this is
+        # the finer rule that previously did not exist at all (e.g. it would
+        # not have caught a Class 5 student being issued an "EP" receipt,
+        # since EP and EMP share the same department). Only applies to
+        # student-attached receipts of a non-exempt code; EMJC/BUS/DV have
+        # their own separate rules (see _ELIGIBILITY_EXEMPT_CODES above).
+        chosen_code = chosen_rt.get("code")
+        if student and chosen_code and chosen_code not in _ELIGIBILITY_EXEMPT_CODES:
+            eligible_codes, _notes = eligible_receipt_codes_for_class(
+                class_doc.get("name") if class_doc else None,
+                student.get("medium"),
+                student.get("stream"),
+            )
+            if eligible_codes and chosen_code not in eligible_codes:
+                raise HTTPException(
+                    400,
+                    f"{student['name']}'s class/medium ({(class_doc.get('name') if class_doc else 'unknown')} · "
+                    f"{student.get('medium') or 'unknown medium'}) does not match receipt type '{chosen_rt.get('name')}' "
+                    f"({chosen_code}). Eligible type(s) for this student: {', '.join(eligible_codes)}."
+                )
+
+    if body.receipt_type == "debit_voucher":
+        number = await next_voucher_number(ay)
+    else:
+        number = await next_receipt_number(dept["code"], ay)
+    rid = gen_id()
+    # Rich student snapshot so receipts always self-describe (survives student edits)
+    snapshot = None
+    if student:
+        fs_doc = await db.fee_structures.find_one({"id": student.get("fee_structure_id")}, {"_id":0, "items":0}) if student.get("fee_structure_id") else None
+        bus_route_doc = await db.bus_routes.find_one({"code": student.get("bus_route")}, {"_id":0}) if student.get("bus_route") else None
+        snapshot = {
+            "admission_no": student["admission_no"], "name": student["name"],
+            "father_name": student.get("father_name"), "mother_name": student.get("mother_name"),
+            "guardian_mobile": student.get("guardian_mobile"),
+            "class_id": student.get("class_id"),
+            "class_name": class_doc.get("name") if class_doc else None,
+            "section": student.get("section"), "roll_no": student.get("roll_no"),
+            "medium": student.get("medium"), "stream": student.get("stream"),
+            "bus_stop_no": student.get("bus_stop_no"),
+            "bus_stop_name": student.get("bus_stop_name"),
+            "bus_main_area": student.get("bus_main_area"),
+            # "Bus No." (vehicle_no) — captured from the student's linked bus_route,
+            # if one exists, at the moment this receipt is created. Currently no
+            # student has a bus_route assigned (0 routes exist system-wide), so this
+            # will be None on every current receipt — that's correct, not a bug: it
+            # means the field is real but genuinely unpopulated, never invented.
+            "bus_vehicle_no": bus_route_doc.get("vehicle_no") if bus_route_doc else None,
+            "academic_year": student.get("academic_year") or ay,
+            "fee_structure_name": (f"{fs_doc.get('medium')} · {fs_doc.get('class_name')}"
+                                    + (f" · {fs_doc.get('stream')}" if fs_doc and fs_doc.get('stream') else "")) if fs_doc else None,
+        }
 
     doc = {
         "id": rid, "number": number, "receipt_type": body.receipt_type,
@@ -408,7 +509,7 @@ async def list_receipts(
     if receipt_type: query["receipt_type"] = receipt_type
     if student_id: query["student_id"] = student_id
     if cashier_id: query["cashier_id"] = cashier_id
-    if q: query["number"] = {"$regex": q, "$options": "i"}
+    if q: query["number"] = {"$regex": re.escape(q), "$options": "i"}  # literal text, see students.py's list_students() fix
     if date_from or date_to:
         rng = {}
         if date_from: rng["$gte"] = date_from
@@ -423,7 +524,7 @@ async def get_receipt(rid: str, user = Depends(get_current_user)):
     return r
 
 @router.post("/receipts/{rid}/reprint")
-async def reprint_receipt(rid: str, user = Depends(get_current_user)):
+async def reprint_receipt(rid: str, user = Depends(require_roles("administrator","cashier"))):
     r = await db.receipts.find_one({"id": rid})
     if not r: raise HTTPException(404, "Not found")
     await db.receipts.update_one({"id": rid}, {"$inc": {"reprint_count": 1}, "$set":{"last_reprint_at": now_iso(), "last_reprint_by": user["name"]}})
@@ -440,13 +541,39 @@ async def cancel_receipt(rid: str, body: Dict[str, str], user = Depends(require_
     await audit(user, "cancel", "receipt", rid, {"reason": reason})
     return {"ok": True}
 
+@router.delete("/receipts/{rid}")
+async def delete_receipt(rid: str, user = Depends(require_receipt_delete_pin)):
+    """Permanent, irreversible receipt deletion - completely separate from cancel/void
+    above, which keeps the record. Gated by require_receipt_delete_pin: role check
+    (administrator/manager) AND the fixed deletion PIN, verified server-side, BEFORE
+    this function body ever runs - by the time we get here, both have already passed.
+    The receipt's `number` is never released for reuse: this only removes the
+    document from `db.receipts`, and never touches `db.counters` in any way, so the
+    numbering sequence stays permanently consumed at whatever it already reached."""
+    r = await db.receipts.find_one({"id": rid})
+    if not r:
+        await audit(user, "receipt_delete_failed", "receipt", rid, {"reason": "receipt_not_found"})
+        raise HTTPException(404, "Receipt not found")
+    await db.receipts.delete_one({"id": rid})
+    await audit(user, "receipt_deleted", "receipt", rid, {
+        "number": r.get("number"), "total": r.get("total"), "student_id": r.get("student_id"),
+        "receipt_type": r.get("receipt_type"),
+    })
+    return {"ok": True, "deleted_number": r.get("number")}
+
 # ---------- Adjustments ----------
 @router.post("/adjustments")
 async def create_adjustment(body: AdjustmentIn, user = Depends(require_roles("administrator","manager","accountant","cashier"))):
+    # A Fee Adjustment must always be attached to a real, currently-selected student -
+    # never a mistyped/pasted id that silently creates an orphaned record nobody's
+    # ledger ever picks up.
+    student = await db.students.find_one({"id": body.student_id}, {"_id": 0})
+    if not student:
+        raise HTTPException(404, "Student not found - please select a valid student")
     aid = gen_id()
     doc = {"id": aid, **body.model_dump(), "status":"pending", "requested_by": user["id"], "requested_by_name": user["name"], "created_at": now_iso()}
     await db.adjustments.insert_one(doc)
-    await audit(user, "create", "adjustment", aid, {"amount": body.amount, "type": body.adjustment_type})
+    await audit(user, "create", "adjustment", aid, {"amount": body.amount, "type": body.adjustment_type, "student": student.get("name"), "admission_no": student.get("admission_no")})
     return {k:v for k,v in doc.items() if k != "_id"}
 
 @router.get("/adjustments")
@@ -472,47 +599,374 @@ async def reject_adjustment(aid: str, body: Dict[str,str], user = Depends(requir
     await audit(user, "reject", "adjustment", aid)
     return {"ok": True}
 
-# ---------- Extensions ----------
+@router.get("/adjustments/{aid}/letter")
+async def adjustment_letter_pdf(aid: str, user = Depends(get_current_user)):
+    """Concession / Fee Adjustment Letter for a Concession Ledger record. No separate
+    'Concession Letter' template exists elsewhere in the app - this reuses the exact
+    visual style (header, fonts, table structure, signature block) of the only other
+    finalized fee-adjustment PDF in the codebase, /fee-adjustments/{id}/pdf, so every
+    printed Fee Adjustment document in FeeHub looks the same. Works for a record from
+    either the legacy Adjustments screen or a completed Fee Adjustment Application -
+    both are the same `adjustments` collection the Concession Ledger reads."""
+    import io, html as _html
+    from xhtml2pdf import pisa
+    from routers.fee_adjustments import _student_snapshot
+
+    adj = await db.adjustments.find_one({"id": aid}, {"_id": 0})
+    if not adj:
+        raise HTTPException(404, "Not found")
+    if adj.get("status") != "approved":
+        raise HTTPException(409, "Only an approved adjustment can be printed as a letter")
+    snap = await _student_snapshot(adj["student_id"])
+    settings = await get_settings_doc()
+
+    def inr(n):
+        try: return "Rs. {:,.2f}".format(float(n))
+        except Exception: return "-"
+
+    school_name = (settings.get("school_name") or "Balaji Convent").upper()
+    school_address = settings.get("school_address") or ""
+    school_contact = " &middot; ".join(x for x in [
+        f"Mob: {settings['school_phone']}" if settings.get("school_phone") else "",
+        f"Email: {settings['school_email']}" if settings.get("school_email") else "",
+    ] if x)
+
+    adj_type_label = (adj.get("adjustment_type") or "-").replace("_", " ").title()
+    approved_line = (f"Approved by {_html.escape(adj['approved_by_name'])} on {adj['approved_at'][:10]}"
+                      if adj.get("approved_by_name") and adj.get("approved_at") else "-")
+
+    html_str = f"""<html><head><style>
+      @page {{ size: A4; margin: 14mm; }}
+      body {{ font-family: Helvetica, Arial, sans-serif; font-size: 10.5px; color: #111; }}
+      h1 {{ font-size: 16px; text-align:center; margin: 0; }}
+      .sub {{ text-align:center; font-size: 10px; color:#444; margin: 1px 0; }}
+      .app-no {{ text-align:center; font-weight:bold; font-size: 12px; border: 1.5px solid #111; display:inline-block; padding: 3px 14px; margin: 6px 0 10px; }}
+      table.details {{ width:100%; border-collapse: collapse; margin-bottom: 10px; }}
+      table.details td {{ padding: 3px 4px; font-size: 10.5px; }}
+      table.details td.label {{ color:#555; width: 130px; }}
+      .section-title {{ font-weight:bold; font-size:11px; text-transform:uppercase; border-bottom:1.5px solid #111; padding-bottom:2px; margin: 10px 0 6px; }}
+      table.fee {{ width:100%; border-collapse: collapse; margin-bottom: 8px; }}
+      table.fee td, table.fee th {{ border: 1px solid #999; padding: 4px 6px; font-size: 10.5px; }}
+      table.fee th {{ background:#f0f0f0; text-align:left; }}
+      td.r {{ text-align:right; }}
+      td.b {{ font-weight: bold; }}
+      .reason-box {{ border: 1px solid #999; padding: 6px; min-height: 40px; font-size: 10.5px; }}
+      table.sig {{ width:100%; border-collapse: collapse; margin-top: 40px; }}
+      table.sig td {{ width:33.33%; text-align:center; border-top: 1px solid #333; padding-top: 5px; font-weight: bold; font-size: 10.5px; }}
+    </style></head><body>
+    <h1>{_html.escape(school_name)}</h1>
+    <div class="sub">{_html.escape(school_address)}</div>
+    {f'<div class="sub">{school_contact}</div>' if school_contact else ''}
+    <div style="text-align:center;"><span class="app-no">CONCESSION / FEE ADJUSTMENT LETTER</span></div>
+
+    <table class="details">
+      <tr><td class="label">Student Name</td><td class="b">{_html.escape(snap['student_name'] or '')}</td>
+          <td class="label">Admission No.</td><td class="b">{_html.escape(snap['admission_no'] or '')}</td></tr>
+      <tr><td class="label">Class</td><td>{_html.escape(snap['class_name'] or '')}{(' / ' + snap['section']) if snap.get('section') else ''}</td>
+          <td class="label">Medium</td><td>{_html.escape(snap['medium'] or '')}{(' - ' + snap['stream']) if snap.get('stream') else ''}</td></tr>
+      <tr><td class="label">Academic Year</td><td>{_html.escape(snap['academic_year'] or '')}</td>
+          <td class="label">Date</td><td>{(adj.get('created_at') or '')[:10]}</td></tr>
+    </table>
+
+    <div class="section-title">Fee Details</div>
+    <table class="fee">
+      <tr><th>Total Fee</th><th>Fee Paid Till Now</th><th>Concession / Adjustment Amount</th><th>Type</th></tr>
+      <tr><td class="r">{inr(snap['total_fee'])}</td><td class="r">{inr(snap['total_paid'])}</td><td class="r b">{inr(adj.get('amount', 0))}</td><td>{_html.escape(adj_type_label)}</td></tr>
+    </table>
+
+    <div class="section-title">Reason for Adjustment</div>
+    <div class="reason-box">{_html.escape(adj.get('reason','') or '')}</div>
+
+    <div style="font-size:10px; color:#555; margin-top:8px;">{approved_line}</div>
+
+    <table class="sig">
+      <tr>
+        <td>ACCOUNTANT</td>
+        <td>MANAGER</td>
+        <td>PRINCIPAL / ADMINISTRATOR</td>
+      </tr>
+    </table>
+    </body></html>"""
+
+    buf = io.BytesIO()
+    pisa.CreatePDF(html_str, dest=buf)
+    return Response(content=buf.getvalue(), media_type="application/pdf",
+                     headers={"Content-Disposition": f'inline; filename="Concession_Letter_{snap.get("admission_no") or aid}.pdf"'})
+
+# ---------- Extensions (Payment Extension Application - two-stage real-world workflow) ----------
+# Stage 1 (Cashier): search student -> live snapshot -> reason -> PRINT. Creates the
+# application as PENDING_APPROVAL and prints it with BLANK installment boxes - printing
+# is never approval. Stage 2 (Cashier, once the physically-signed paper returns): open
+# the application, transcribe the signed installment plan, confirm "signed approval
+# received", which validates the plan against the CURRENT outstanding fee, marks the
+# application APPROVED, and creates one reminder per approved installment (never a
+# receipt, never a fee/balance change - see create_receipt for the actual payment path).
 @router.post("/extensions")
-async def create_extension(body: ExtensionIn, user = Depends(require_roles("administrator","manager","accountant","cashier"))):
-    if len(body.installments) > 4:
-        raise HTTPException(400, "Max 4 installments allowed")
-    total = sum(float(i.get("amount",0)) for i in body.installments)
-    if abs(total - body.outstanding_amount) > 0.01:
-        raise HTTPException(400, f"Installments total (₹{total}) must equal outstanding (₹{body.outstanding_amount})")
+async def create_extension(body: ExtensionCreateIn, user = Depends(require_roles("administrator","manager","accountant","cashier"))):
+    student = await db.students.find_one({"id": body.student_id}, {"_id": 0})
+    if not student:
+        raise HTTPException(404, "Student not found - please select a valid student")
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(400, "A reason is required for every Payment Extension application")
+    from routers.fee_adjustments import _student_snapshot
+    snap = await _student_snapshot(body.student_id)
     eid = gen_id()
-    doc = {"id": eid, **body.model_dump(), "status":"pending", "requested_by": user["id"], "requested_by_name": user["name"], "created_at": now_iso()}
+    doc = {
+        "id": eid, "student_id": body.student_id, "snapshot": snap, "reason": reason,
+        "outstanding_amount": snap["current_balance"],
+        "status": "pending_approval", "approved_installments": None,
+        "requested_by": user["id"], "requested_by_name": user["name"], "created_at": now_iso(),
+        "printed_count": 0, "last_printed_at": None,
+        "approved_by": None, "approved_by_name": None, "approved_at": None,
+    }
     await db.extensions.insert_one(doc)
-    await audit(user, "create", "extension", eid, {"amount": total})
-    return {k:v for k,v in doc.items() if k != "_id"}
+    await audit(user, "create", "extension_application", eid, {"student": student.get("name"), "admission_no": student.get("admission_no"), "reason": reason})
+    return {k: v for k, v in doc.items() if k != "_id"}
 
 @router.get("/extensions")
 async def list_extensions(status: Optional[str] = None, student_id: Optional[str] = None, user = Depends(get_current_user)):
-    q = {}
+    q: Dict[str, Any] = {}
     if status: q["status"] = status
     if student_id: q["student_id"] = student_id
-    return await db.extensions.find(q, {"_id":0}).sort("created_at", -1).to_list(500)
+    rows = await db.extensions.find(q, {"_id":0}).sort("created_at", -1).to_list(500)
+    eids = [r["id"] for r in rows]
+    # "Next Installment" - the earliest still-pending reminder for this application, if any.
+    pending_reminders = await db.reminders.find(
+        {"extension_id": {"$in": eids}, "status": "pending"}, {"_id": 0}
+    ).sort("due_date", 1).to_list(2000) if eids else []
+    next_by_ext: Dict[str, dict] = {}
+    for rem in pending_reminders:
+        next_by_ext.setdefault(rem["extension_id"], rem)
+    # Fallback for any pre-existing/legacy row created before the snapshot field existed.
+    sids = list({r["student_id"] for r in rows if r.get("student_id") and not r.get("snapshot")})
+    students = {s["id"]: s for s in await db.students.find({"id": {"$in": sids}}, {"_id": 0, "name": 1, "admission_no": 1}).to_list(len(sids) or 1)} if sids else {}
+    for r in rows:
+        snap = r.get("snapshot") or {}
+        legacy = students.get(r.get("student_id"), {})
+        r["student_name"] = snap.get("student_name") or legacy.get("name")
+        r["admission_no"] = snap.get("admission_no") or legacy.get("admission_no")
+        r["class_name"] = snap.get("class_name")
+        r["section"] = snap.get("section")
+        nxt = next_by_ext.get(r["id"])
+        r["next_installment"] = {"amount": nxt["amount"], "due_date": nxt["due_date"]} if nxt else None
+    return rows
 
-@router.post("/extensions/{eid}/approve")
-async def approve_extension(eid: str, user = Depends(require_roles("administrator","manager"))):
+@router.get("/extensions/{eid}")
+async def get_extension(eid: str, user = Depends(get_current_user)):
+    ext = await db.extensions.find_one({"id": eid}, {"_id": 0})
+    if not ext:
+        raise HTTPException(404, "Not found")
+    reminders = await db.reminders.find({"extension_id": eid}, {"_id": 0}).sort("installment_index", 1).to_list(10)
+    ext["reminders"] = reminders
+    return ext
+
+@router.post("/extensions/{eid}/approve-installments")
+async def approve_extension_installments(eid: str, body: ExtensionApproveIn, user = Depends(require_roles("administrator","manager","accountant","cashier"))):
+    """Stage 2: the cashier transcribes the SIGNED PHYSICAL PAPER's installment plan
+    here. There is no digital Secretary sign-off - the physical signature IS the
+    approval; `confirmed` just mirrors the on-screen "Signed approval received from
+    school authority?" confirmation the cashier must explicitly click through."""
     ext = await db.extensions.find_one({"id": eid})
-    if not ext: raise HTTPException(404, "Not found")
-    await db.extensions.update_one({"id": eid}, {"$set":{"status":"approved","approved_by_name": user["name"],"approved_at": now_iso()}})
-    for idx, inst in enumerate(ext.get("installments", [])):
+    if not ext:
+        raise HTTPException(404, "Not found")
+    if ext["status"] != "pending_approval":
+        raise HTTPException(409, f"Application is '{ext['status']}' - only a Pending Approval application can be approved")
+    if not body.confirmed:
+        raise HTTPException(400, "Signed approval from the school authority must be confirmed before approving")
+    insts = body.installments
+    if not insts:
+        raise HTTPException(400, "At least 1 installment is required")
+    if len(insts) > 4:
+        raise HTTPException(400, "A maximum of 4 installments is allowed")
+    for idx, inst in enumerate(insts):
+        if inst.amount is None or inst.amount <= 0:
+            raise HTTPException(400, f"Installment {idx+1}: amount must be a positive number")
+        if not (inst.due_date or "").strip():
+            raise HTTPException(400, f"Installment {idx+1}: a proposed date is required")
+
+    from routers.fee_adjustments import _student_snapshot
+    snap = await _student_snapshot(ext["student_id"])
+    current_outstanding = round(float(snap["current_balance"]), 2)
+    total = round(sum(float(i.amount) for i in insts), 2)
+    if abs(total - current_outstanding) > 0.01:
+        raise HTTPException(
+            400,
+            f"Approved installment total (Rs. {total:,.2f}) must equal the student's current "
+            f"outstanding fee (Rs. {current_outstanding:,.2f})."
+        )
+
+    approved_installments = [{"installment_no": idx + 1, "amount": float(i.amount), "due_date": i.due_date.strip()} for idx, i in enumerate(insts)]
+    await db.extensions.update_one({"id": eid}, {"$set": {
+        "approved_installments": approved_installments, "status": "approved",
+        "outstanding_at_approval": current_outstanding,
+        "approved_by": user["id"], "approved_by_name": user["name"], "approved_at": now_iso(),
+    }})
+    # Three distinct audit events for one cashier action, per the real-world sequence:
+    # the physical authority approval, the data entry of that approval, and the
+    # resulting status change - kept separate so the audit trail reads accurately.
+    await audit(user, "authority_approval_received", "extension_application", eid, {
+        "student": ext["snapshot"]["student_name"], "admission_no": ext["snapshot"]["admission_no"],
+    })
+    await audit(user, "approved_installment_plan_entered", "extension_application", eid, {
+        "installments": approved_installments, "total": total,
+    })
+    await audit(user, "approve", "extension_application", eid, {"status": "approved"})
+
+    # One reminder per approved installment - guarded against duplicates so opening
+    # this application again (or a retry) never creates a second set.
+    for inst in approved_installments:
+        exists = await db.reminders.find_one({"extension_id": eid, "installment_index": inst["installment_no"] - 1})
+        if exists:
+            continue
         await db.reminders.insert_one({
             "id": gen_id(), "extension_id": eid, "student_id": ext["student_id"],
-            "installment_index": idx, "installment_name": inst.get("name") or f"Installment {idx+1}",
-            "amount": float(inst.get("amount",0)), "due_date": inst.get("due_date"),
+            "installment_index": inst["installment_no"] - 1, "installment_name": f"Installment {inst['installment_no']}",
+            "amount": inst["amount"], "due_date": inst["due_date"],
+            "reminder_text": "Call parent regarding payment extension installment.",
             "status": "pending", "created_at": now_iso(),
         })
-    await audit(user, "approve", "extension", eid)
-    return {"ok": True}
+    return await db.extensions.find_one({"id": eid}, {"_id": 0})
 
 @router.post("/extensions/{eid}/reject")
 async def reject_extension(eid: str, body: Dict[str,str], user = Depends(require_roles("administrator","manager"))):
-    await db.extensions.update_one({"id": eid}, {"$set":{"status":"rejected","reject_reason": body.get("reason",""),"approved_by_name": user["name"],"approved_at": now_iso()}})
-    await audit(user, "reject", "extension", eid)
+    ext = await db.extensions.find_one({"id": eid})
+    if not ext:
+        raise HTTPException(404, "Not found")
+    if ext["status"] != "pending_approval":
+        raise HTTPException(409, f"Application is '{ext['status']}' - only a Pending Approval application can be cancelled")
+    await db.extensions.update_one({"id": eid}, {"$set":{"status":"cancelled","reject_reason": body.get("reason",""),"approved_by_name": user["name"],"approved_at": now_iso()}})
+    await audit(user, "reject", "extension_application", eid, {"reason": body.get("reason","")})
     return {"ok": True}
+
+@router.get("/extensions/{eid}/pdf")
+async def extension_pdf(eid: str, user = Depends(get_current_user)):
+    """Payment Extension Application - approved design reference: school header
+    (name/address/Mob/Email/tagline), A. Student Details, B. Fee Details (as per
+    current records - live snapshot, never invented), C. Proposed Installment
+    Plan (4 installments - BLANK until the application is Approved, matching the
+    printed paper's hand-written boxes), D. Reason for Payment Extension, Secretary
+    signature. Same physical page as the Daily Fee & Expense Report: 142.8mm x 210mm
+    portrait (the receipt's own 210x142.8mm landscape paper, unchanged, rotated).
+    Every fetch of this endpoint is itself the real-world "print" action, so it is
+    audited as APPLICATION PRINTED here - never on creation, never implying approval."""
+    import io, html as _html
+    from xhtml2pdf import pisa
+    from routers.fee_adjustments import _student_snapshot
+
+    ext = await db.extensions.find_one({"id": eid}, {"_id": 0})
+    if not ext:
+        raise HTTPException(404, "Not found")
+    snap = await _student_snapshot(ext["student_id"])
+    settings = await get_settings_doc()
+
+    await db.extensions.update_one({"id": eid}, {"$inc": {"printed_count": 1}, "$set": {"last_printed_at": now_iso()}})
+    await audit(user, "print", "extension_application", eid, {"student": snap.get("student_name"), "admission_no": snap.get("admission_no")})
+
+    def inr(n):
+        try: return "Rs. {:,.2f}".format(float(n))
+        except Exception: return "Rs. 0.00"
+
+    school_name = (settings.get("school_name") or "Balaji Convent").upper()
+    school_address = settings.get("school_address") or ""
+    school_contact = " &middot; ".join(x for x in [
+        f"Mob: {settings['school_phone']}" if settings.get("school_phone") else "",
+        f"Email: {settings['school_email']}" if settings.get("school_email") else "",
+    ] if x)
+
+    # BLANK boxes for hand-writing until the signed paper has actually come back and
+    # been transcribed via /approve-installments - never invented/pre-filled figures.
+    approved = ext.get("approved_installments") or []
+    inst_cells = ""
+    for i in range(4):
+        inst = approved[i] if i < len(approved) else None
+        amt = inr(inst["amount"]) if inst else "&nbsp;"
+        due = _html.escape(inst.get("due_date") or "") if inst else ""
+        inst_cells += f"""<td class="inst">
+            <div class="inst-h">Installment {i+1}</div>
+            <div class="inst-l">Amount (Rs.)</div><div class="inst-v">{amt}</div>
+            <div class="inst-l">Proposed Date</div><div class="inst-v">{due or '&nbsp;'}</div>
+        </td>"""
+
+    html_str = f"""<html><head><style>
+      @page {{ size: 142.8mm 210mm; margin: 6mm 5mm; }}
+      body {{ font-family: Helvetica, Arial, sans-serif; color: #1a1a1a; font-size: 7.6px; }}
+      .hd {{ text-align:center; border-bottom: 1.5px solid #1e3a5f; padding-bottom: 5px; margin-bottom: 6px; }}
+      .hd h1 {{ font-size: 13px; margin: 0 0 2px; color:#1e3a5f; }}
+      .hd .sub {{ font-size: 6.8px; color:#333; margin: 1px 0; }}
+      .hd .tag {{ font-size: 6.6px; color:#c0662a; font-style: italic; margin-top: 3px; }}
+      .title-bar {{ background:#fbe4cc; text-align:center; padding: 5px 2px; margin-bottom: 6px; }}
+      .title-bar .t1 {{ font-size: 10px; font-weight: bold; color:#1e3a5f; letter-spacing: 0.4px; }}
+      .title-bar .t2 {{ font-size: 6.8px; font-weight: bold; color:#444; margin-top: 1px; }}
+      .date-line {{ text-align:right; font-size: 7.2px; margin-bottom: 6px; }}
+      .section {{ background:#1e3a5f; color:#fff; font-weight:bold; font-size: 7.6px; padding: 3px 5px; text-transform: uppercase; }}
+      table.kv {{ width:100%; border-collapse: collapse; margin-bottom: 6px; }}
+      table.kv td {{ border: 1px solid #b9c4d0; padding: 2.5px 5px; font-size: 7.4px; }}
+      table.kv td.label {{ width: 34%; background:#f3f6fa; }}
+      table.kv td.sep {{ width: 4%; text-align:center; }}
+      table.fee td.amt {{ font-weight:bold; }}
+      table.inst {{ width:100%; border-collapse: collapse; margin-bottom: 6px; table-layout: fixed; }}
+      table.inst td.inst {{ border: 1px solid #b9c4d0; padding: 4px 3px; vertical-align: top; width:25%; }}
+      .inst-h {{ background:#fbe4cc; font-weight:bold; text-align:center; font-size: 6.8px; padding: 2px 0; margin: -4px -3px 3px; }}
+      .inst-l {{ font-size: 6px; color:#666; margin-top: 3px; }}
+      .inst-v {{ border: 1px solid #ccc; min-height: 12px; font-size: 6.8px; padding: 2px 3px; }}
+      .reason-box {{ border: 1px solid #b9c4d0; min-height: 34px; padding: 5px; font-size: 7.4px; margin-bottom: 8px; }}
+      .closing {{ font-size: 7px; margin-bottom: 20px; }}
+      table.sig {{ width:100%; }}
+      table.sig td {{ width:50%; }}
+      .sig-line {{ border-top: 1px solid #333; text-align:center; padding-top: 3px; font-weight:bold; font-size: 7.2px; float:right; width: 60%; }}
+      .sig-cap {{ text-align:center; font-size: 6.2px; color:#555; float:right; width: 60%; }}
+      .ftr {{ margin-top: 30px; border-top: 1px solid #c0662a; padding-top: 4px; font-size: 6px; color:#555; display:flex; justify-content:space-between; }}
+    </style></head><body>
+      <div class="hd">
+        <h1>{_html.escape(school_name)} &amp; JUNIOR COLLEGE</h1>
+        <div class="sub">{_html.escape(school_address)}</div>
+        <div class="sub">{school_contact}</div>
+        <div class="tag">Education for a Brighter Tomorrow</div>
+      </div>
+      <div class="title-bar">
+        <div class="t1">PAYMENT EXTENSION APPLICATION</div>
+        <div class="t2">REQUEST FOR INSTALLMENT PAYMENT</div>
+      </div>
+      <div class="date-line">Date: {(ext.get('created_at') or '')[:10]} &nbsp;&nbsp;|&nbsp;&nbsp; Status: {_html.escape((ext.get('status') or '').replace('_',' ').upper())}</div>
+
+      <div class="section">A. Student Details</div>
+      <table class="kv">
+        <tr><td class="label">Student Name</td><td class="sep">:</td><td>{_html.escape(snap['student_name'] or '')}</td></tr>
+        <tr><td class="label">Admission No.</td><td class="sep">:</td><td>{_html.escape(snap['admission_no'] or '')}</td></tr>
+        <tr><td class="label">Class</td><td class="sep">:</td><td>{_html.escape(snap['class_name'] or '')} &nbsp;&nbsp; Section: {_html.escape(snap.get('section') or '-')}</td></tr>
+        <tr><td class="label">Department / Medium</td><td class="sep">:</td><td>{_html.escape(snap.get('medium') or '')}{(' - ' + snap['stream']) if snap.get('stream') else ''}</td></tr>
+      </table>
+
+      <div class="section">B. Fee Details (As Per Current Records)</div>
+      <table class="kv fee">
+        <tr><td class="label">Total Fee</td><td class="sep">:</td><td class="amt">{inr(snap['total_fee'])}</td></tr>
+        <tr><td class="label">Fee Paid Till Now</td><td class="sep">:</td><td class="amt">{inr(snap['total_paid'])}</td></tr>
+        <tr><td class="label">Outstanding / Remaining Fee</td><td class="sep">:</td><td class="amt">{inr(snap['current_balance'])}</td></tr>
+      </table>
+
+      <div class="section">C. {'Approved' if approved else 'Proposed'} Installment Plan (4 Installments)</div>
+      <table class="inst"><tr>{inst_cells}</tr></table>
+
+      <div class="section">D. Reason for Payment Extension</div>
+      <div class="reason-box">{_html.escape(ext.get('reason') or '')}</div>
+
+      <div class="closing">I request the school management to kindly approve the above payment extension plan.<br/>Thank you.</div>
+
+      <div style="overflow:hidden;">
+        <div class="sig-line">Signature of Secretary</div>
+      </div>
+      <div style="overflow:hidden;">
+        <div class="sig-cap">(For Approval)</div>
+      </div>
+
+      <div class="ftr"><span>{_html.escape(school_name)} &amp; Junior College, Butibori</span><span>Discipline | Knowledge | Better Future</span></div>
+    </body></html>"""
+
+    buf = io.BytesIO()
+    pisa.CreatePDF(html_str, dest=buf)
+    return Response(content=buf.getvalue(), media_type="application/pdf",
+                     headers={"Content-Disposition": f'inline; filename="Payment_Extension_{snap.get("admission_no") or eid}.pdf"'})
 
 # ---------- Reminders ----------
 @router.get("/reminders")
