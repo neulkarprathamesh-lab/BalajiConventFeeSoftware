@@ -525,6 +525,27 @@ async def require_fee_edit_access_pin(
         raise HTTPException(403, "Invalid Master PIN")
     return user
 
+# ---------------- Student profile-edit PIN gate ----------------
+# Same system-wide Master PIN as above (RECEIPT_DELETE_PIN_DOC_ID). Admin-only
+# (not manager/accountant) since Student Profile edits can rewrite identity
+# fields (name, guardian, contact) that feed receipts and reports school-wide.
+async def require_student_edit_pin(
+    sid: str,
+    x_student_edit_pin: Optional[str] = Header(None),
+    user = Depends(require_roles("administrator")),
+):
+    doc = await db.security_config.find_one({"id": RECEIPT_DELETE_PIN_DOC_ID})
+    if not doc or not doc.get("pin_hash"):
+        await audit(user, "student_edit_failed", "student", sid, {"reason": "pin_not_configured"})
+        raise HTTPException(500, "Master PIN is not configured on the server")
+    if not x_student_edit_pin:
+        await audit(user, "student_edit_failed", "student", sid, {"reason": "missing_pin"})
+        raise HTTPException(401, "Master PIN required")
+    if not verify_password(x_student_edit_pin, doc["pin_hash"]):
+        await audit(user, "student_edit_failed", "student", sid, {"reason": "invalid_pin"})
+        raise HTTPException(403, "Invalid Master PIN")
+    return user
+
 # ---------------- Settings helpers ----------------
 async def get_settings_doc():
     doc = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0})

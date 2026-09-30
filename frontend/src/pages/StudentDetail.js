@@ -2,10 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
-import { Receipt as ReceiptIcon, FileEdit, CalendarClock, Bus, History, X, Landmark, FileDown } from 'lucide-react';
+import { Receipt as ReceiptIcon, FileEdit, CalendarClock, Bus, History, X, Landmark, FileDown, Pencil, Shield, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import BusStopPicker from '@/components/BusStopPicker';
 import { useAuth } from '@/context/AuthContext';
+import useLiveRefresh from '@/lib/useLiveRefresh';
 
 export default function StudentDetail() {
   const { id } = useParams();
@@ -20,11 +21,17 @@ export default function StudentDetail() {
   const [obBusy, setObBusy] = useState(false);
   const [showObHistory, setShowObHistory] = useState(false);
   const [obHistory, setObHistory] = useState(null);
+  const [editOpen, setEditOpen] = useState(false);
   const canManageOb = user?.role === 'administrator' || user?.role === 'manager';
   const canRecordObPayment = canManageOb || user?.role === 'accountant';
+  const isAdmin = user?.role === 'administrator';
 
   const load = () => api.get(`/students/${id}/ledger`).then(r => setData(r.data));
   useEffect(() => { load(); }, [id]);
+  // A receipt for THIS student created from another PC (or another tab)
+  // while this profile is open must update Paid/Outstanding without a
+  // manual reload.
+  useLiveRefresh(load, 10000);
   useEffect(() => { api.get('/bus-stops').then(r => setBusStops(r.data || [])).catch(() => {}); }, []);
 
   // ---- Payment Receipt History (active 2-session retention; see backend
@@ -115,12 +122,27 @@ export default function StudentDetail() {
       <PageHeader title={s.name} subtitle={`Admission No: ${s.admission_no}`}
         actions={
           <div className="flex gap-2">
+            {isAdmin && (
+              <button onClick={() => setEditOpen(true)} title="Edit Student Profile" data-testid="sd-edit-profile"
+                className="h-9 w-9 flex items-center justify-center border border-slate-300 rounded hover:bg-slate-100 text-slate-600">
+                <Pencil className="w-4 h-4" />
+              </button>
+            )}
             <button data-testid="sd-new-receipt" onClick={() => nav(`/new-receipt/entry?student=${id}`)} className="h-9 px-3 bg-blue-600 text-white rounded text-sm flex items-center gap-1.5 hover:bg-blue-700"><ReceiptIcon className="w-4 h-4" /> New Receipt</button>
             <button onClick={() => nav(`/adjustments?student=${id}`)} className="h-9 px-3 border border-slate-300 rounded text-sm flex items-center gap-1.5 hover:bg-slate-100"><FileEdit className="w-4 h-4" /> Adjustment</button>
             <button onClick={() => nav(`/extensions?student=${id}`)} className="h-9 px-3 border border-slate-300 rounded text-sm flex items-center gap-1.5 hover:bg-slate-100"><CalendarClock className="w-4 h-4" /> Extension</button>
           </div>
         }
       />
+
+      {editOpen && (
+        <EditProfileModal
+          studentId={id}
+          student={s}
+          onClose={() => setEditOpen(false)}
+          onSaved={() => { setEditOpen(false); load(); }}
+        />
+      )}
       <div className="p-6 space-y-6">
         <div className="bg-white border border-slate-200 rounded px-4 py-2.5 flex flex-wrap gap-x-6 gap-y-1 text-sm" data-testid="student-academic-identity">
           {s.department_name && <span><span className="text-slate-500">Department:</span> <span className="font-medium">{s.department_name}</span></span>}
@@ -554,6 +576,123 @@ function FeeAdjustmentHistoryPanel({ studentId, nav }) {
     </div>
   );
 }
+
+// Legacy JC stream synonyms — same list Students.js/AssignStudents.js/
+// Promotion.js/FeeStructure.js already use: preserved as-is on a student's
+// OWN current class, but never offered as a NEW choice for anyone else.
+const LEGACY_STREAMS = ['Fisheries', 'Electronics'];
+
+function EditProfileModal({ studentId, student, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    name: student.name || '',
+    guardian_name: student.guardian_name || '',
+    guardian_mobile: student.guardian_mobile || '',
+    father_name: student.father_name || '',
+    mother_name: student.mother_name || '',
+    address: student.address || '',
+    roll_no: student.roll_no || '',
+    section: student.section || '',
+    class_id: student.class_id || '',
+  });
+  const [classes, setClasses] = useState([]);
+  const [reason, setReason] = useState('');
+  const [pin, setPin] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { api.get('/classes').then(r => setClasses(r.data || [])).catch(() => {}); }, []);
+
+  const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
+  const classLabel = (c) => `${c.name}${c.stream ? ' · ' + c.stream : ''}${c.medium ? ' · ' + c.medium : ''}`;
+  const availableClasses = classes
+    .filter(c => !LEGACY_STREAMS.includes(c.stream) || c.id === student.class_id)
+    .sort((a, b) => classLabel(a).localeCompare(classLabel(b)));
+
+  const save = async (e) => {
+    e.preventDefault();
+    if (!reason.trim()) return toast.error('A reason is required');
+    if (pin.length < 4) return toast.error('Master PIN is required');
+    setBusy(true);
+    try {
+      const { data } = await api.patch(`/students/${studentId}/profile`,
+        { fields: form, reason: reason.trim() },
+        { headers: { 'X-Student-Edit-Pin': pin } }
+      );
+      if (data.changed?.length) {
+        toast.success(`Saved: ${data.changed.join(', ')} updated`);
+      } else {
+        toast('No changes to save');
+      }
+      onSaved();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Save failed — no changes were made');
+      setPin('');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <form onSubmit={save} onClick={e => e.stopPropagation()} className="bg-white rounded-lg shadow-2xl w-full max-w-lg border-t-4 border-red-600 max-h-[90vh] overflow-y-auto" data-testid="edit-profile-modal">
+        <div className="p-5 border-b border-slate-200 flex items-start gap-3">
+          <div className="w-10 h-10 rounded-full bg-red-50 text-red-700 flex items-center justify-center flex-shrink-0"><Shield className="w-5 h-5" /></div>
+          <div className="flex-1">
+            <div className="font-heading font-bold text-slate-900">Edit Student Profile</div>
+            <div className="text-[12px] text-slate-600 mt-0.5">Correct master details for {student.name} ({student.admission_no}). Financial history, receipts and payments cannot be changed here.</div>
+          </div>
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-700"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Name" testid="ep-name" value={form.name} onChange={v => set('name', v)} />
+            <Field label="Roll No" testid="ep-roll" value={form.roll_no} onChange={v => set('roll_no', v)} />
+            <Field label="Guardian / Parent Name" testid="ep-guardian" value={form.guardian_name} onChange={v => set('guardian_name', v)} />
+            <Field label="Mobile" testid="ep-mobile" value={form.guardian_mobile} onChange={v => set('guardian_mobile', v)} />
+            <Field label="Father's Name" testid="ep-father" value={form.father_name} onChange={v => set('father_name', v)} />
+            <Field label="Mother's Name" testid="ep-mother" value={form.mother_name} onChange={v => set('mother_name', v)} />
+            <Field label="Section" testid="ep-section" value={form.section} onChange={v => set('section', v)} />
+            <label className="block">
+              <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Class</div>
+              <select data-testid="ep-class" value={form.class_id} onChange={e => set('class_id', e.target.value)}
+                className="w-full h-9 px-2 border border-slate-300 rounded text-sm bg-white">
+                {availableClasses.map(c => <option key={c.id} value={c.id}>{classLabel(c)}</option>)}
+              </select>
+            </label>
+          </div>
+          <label className="block">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Address</div>
+            <textarea data-testid="ep-address" value={form.address} onChange={e => set('address', e.target.value)} rows={2}
+              className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+          </label>
+          <label className="block">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Reason for change (required)</div>
+            <input data-testid="ep-reason" value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Correcting a data-entry mix-up with another student"
+              className="w-full h-9 px-2 border border-slate-300 rounded text-sm bg-white" />
+          </label>
+          <label className="block">
+            <div className="text-[11px] uppercase tracking-widest text-slate-600 font-bold mb-1 flex items-center gap-1"><Lock className="w-3 h-3" /> Master PIN</div>
+            <input data-testid="ep-pin" type="password" inputMode="numeric" maxLength={8} value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
+              placeholder="••••" className="w-full h-11 px-3 border-2 border-slate-300 rounded font-mono text-lg tracking-widest text-center focus:ring-2 focus:ring-blue-600 focus:border-blue-600 focus:outline-none" />
+          </label>
+          <div className="flex items-center gap-2 pt-2">
+            <button type="button" onClick={onClose} className="h-9 px-4 border border-slate-300 rounded text-sm hover:bg-slate-50">Cancel</button>
+            <button type="submit" disabled={busy} data-testid="ep-save" className="flex-1 h-9 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white rounded text-sm font-semibold">
+              {busy ? 'Saving…' : 'Verify PIN & Save'}
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+const Field = ({ label, testid, value, onChange }) => (
+  <label className="block">
+    <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">{label}</div>
+    <input data-testid={testid} value={value} onChange={e => onChange(e.target.value)}
+      className="w-full h-9 px-2 border border-slate-300 rounded text-sm bg-white" />
+  </label>
+);
 
 const Card = ({ label, value, tone='text-slate-900' }) => (
   <div className="bg-white border border-slate-200 rounded p-4">

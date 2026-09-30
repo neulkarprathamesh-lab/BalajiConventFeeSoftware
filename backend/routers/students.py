@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, Response
 from core import (
     db, StudentIn, audit, gen_id, get_current_user, now_iso, require_roles,
     eligible_receipt_codes_for_class, compute_fee_items, apply_opening_paid,
+    require_student_edit_pin,
 )
 
 router = APIRouter(prefix="/api", tags=["students"])
@@ -448,6 +449,78 @@ async def update_student(sid: str, body: Dict[str,Any], user = Depends(require_r
     await db.students.update_one({"id": sid}, {"$set": upd})
     await audit(user, "update", "student", sid, upd)
     return {"ok": True}
+
+# ---------- Protected Student Profile edit (pen icon on Student Profile) ----
+# Admin-only, Master-PIN-gated (require_student_edit_pin, core.py) correction
+# of master-record fields. Deliberately a SEPARATE endpoint from the plain
+# PATCH above (which manager/accountant already use, unprotected, for routine
+# reassignment) — this one is narrower (no fee_structure_id/bus_route/status:
+# nothing financial), requires a reason, and writes one audit_log entry per
+# field actually changed so each edit is individually traceable.
+STUDENT_PROFILE_EDITABLE_FIELDS = (
+    "name", "guardian_name", "guardian_mobile", "father_name", "mother_name",
+    "address", "roll_no", "section", "class_id",
+)
+
+@router.patch("/students/{sid}/profile")
+async def update_student_profile(sid: str, body: Dict[str, Any], user = Depends(require_student_edit_pin)):
+    reason = str(body.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(400, "A reason is required")
+    fields = body.get("fields")
+    if not isinstance(fields, dict) or not fields:
+        raise HTTPException(400, "No fields to update")
+    unknown = set(fields) - set(STUDENT_PROFILE_EDITABLE_FIELDS)
+    if unknown:
+        raise HTTPException(400, f"Field(s) not editable here: {', '.join(sorted(unknown))}")
+
+    student = await db.students.find_one({"id": sid}, {"_id": 0})
+    if not student:
+        raise HTTPException(404, "Student not found")
+
+    upd: Dict[str, Any] = {}
+    changes: List[tuple] = []
+
+    # Class picked from the existing canonical class catalog (Class + Medium +
+    # Stream + Department all come from that one already-validated class doc)
+    # — reuses the same source of truth every other screen (FeeStructure,
+    # bulk-import, promotion) derives these from, rather than re-validating
+    # medium/stream combinations again here.
+    if "class_id" in fields and fields["class_id"] != student.get("class_id"):
+        cls = await db.classes.find_one({"id": fields["class_id"]}, {"_id": 0})
+        if not cls:
+            raise HTTPException(400, "Selected class not found")
+        for f, new_val in (
+            ("class_id", cls["id"]), ("department_id", cls.get("department_id")),
+            ("medium", cls.get("medium")), ("stream", cls.get("stream")),
+        ):
+            old_val = student.get(f)
+            if old_val != new_val:
+                upd[f] = new_val
+                changes.append((f, old_val, new_val))
+
+    for f in STUDENT_PROFILE_EDITABLE_FIELDS:
+        if f == "class_id" or f not in fields:
+            continue
+        new_val = fields[f]
+        if isinstance(new_val, str):
+            new_val = new_val.strip()
+        old_val = student.get(f)
+        if old_val != new_val:
+            upd[f] = new_val
+            changes.append((f, old_val, new_val))
+
+    if not changes:
+        return {"ok": True, "changed": [], "student": student}
+
+    await db.students.update_one({"id": sid}, {"$set": upd})
+    for f, old_val, new_val in changes:
+        await audit(user, "student_profile_edit", "student", sid, {
+            "admission_no": student.get("admission_no"), "student_name": student.get("name"),
+            "field": f, "old_value": old_val, "new_value": new_val, "reason": reason,
+        })
+    updated = await db.students.find_one({"id": sid}, {"_id": 0})
+    return {"ok": True, "changed": [c[0] for c in changes], "student": updated}
 
 # ---------- Bus assignment (with history — see PART 31/32) ----------
 # The exact fee is captured on the assignment record at the moment it's
