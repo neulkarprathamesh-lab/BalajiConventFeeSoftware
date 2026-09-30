@@ -445,7 +445,15 @@ async def bulk_reassign_students(body: Dict[str, Any], user = Depends(require_ro
 
 @router.patch("/students/{sid}")
 async def update_student(sid: str, body: Dict[str,Any], user = Depends(require_roles("administrator","manager","accountant"))):
-    upd = {k:v for k,v in body.items() if k in ("name","class_id","section","guardian_name","guardian_mobile","address","fee_structure_id","bus_route","status")}
+    # Master-data identity fields (name, guardian/parent, mobile, address,
+    # section, class/medium/stream/department) are Admin + Master-PIN +
+    # reason protected via PATCH /students/{sid}/profile (update_student_profile,
+    # below) — deliberately NOT accepted here, so manager/accountant can't
+    # bypass that protection by calling this older, unprotected endpoint
+    # directly. No live UI screen calls this route with those fields anyway
+    # (reassignment goes through the separate /students/bulk-reassign); only
+    # the non-identity operational fields below remain editable through it.
+    upd = {k:v for k,v in body.items() if k in ("fee_structure_id","bus_route","status")}
     await db.students.update_one({"id": sid}, {"$set": upd})
     await audit(user, "update", "student", sid, upd)
     return {"ok": True}
