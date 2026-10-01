@@ -31,11 +31,13 @@ Design decisions (read before touching anything here):
 """
 from typing import Any, Dict, List, Optional
 from pymongo.errors import DuplicateKeyError
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request, Header
 from core import (
     db, audit, gen_id, get_current_user, now_iso, require_roles,
-    DeviceHeartbeatIn, DeviceRenameIn, SyncPushIn, ReceiptIn,
+    hash_password, verify_password,
+    DeviceHeartbeatIn, DeviceRenameIn, DeviceSetPasswordIn, SyncPushIn, ReceiptIn,
     compute_fee_items, apply_opening_paid, eligible_receipt_codes_for_class,
+    require_device_delete_pin,
 )
 
 router = APIRouter(prefix="/api", tags=["sync"])
@@ -57,11 +59,30 @@ def _device_status(last_seen: Optional[str]) -> str:
         return "offline"
 
 
+# ---------------- Device credential / revocation enforcement ----------------
+# A device only needs to pass this when an admin has explicitly set a
+# password for it (password_hash present) - every Client PC that predates
+# this feature has no password_hash, so its sync/heartbeat calls are
+# completely unaffected. A revoked device is always rejected outright,
+# regardless of password, until it registers again under a new device_id.
+async def _check_device_auth(device_id: str, x_device_secret: Optional[str], existing: Optional[dict]):
+    if existing and existing.get("revoked"):
+        raise HTTPException(403, "This device's registration has been revoked by an administrator. Register it again on this PC to resume sync.")
+    if existing and existing.get("password_hash"):
+        if not x_device_secret or not verify_password(x_device_secret, existing["password_hash"]):
+            raise HTTPException(401, "Invalid or missing device credential.")
+
+
 # ---------------- Device registry (Connected PCs) ----------------
 
 @router.post("/devices/heartbeat")
-async def device_heartbeat(body: DeviceHeartbeatIn, request: Request, user=Depends(get_current_user)):
+async def device_heartbeat(
+    body: DeviceHeartbeatIn, request: Request,
+    x_device_secret: Optional[str] = Header(None),
+    user=Depends(get_current_user),
+):
     existing = await db.devices.find_one({"id": body.device_id}, {"_id": 0})
+    await _check_device_auth(body.device_id, x_device_secret, existing)
     now = now_iso()
     # Always taken fresh from the request itself (never client-reported) so a
     # PC that reconnects with a different LAN IP (DHCP lease change, different
@@ -89,7 +110,9 @@ async def device_heartbeat(body: DeviceHeartbeatIn, request: Request, user=Depen
 
 @router.get("/devices")
 async def list_devices(online_only: bool = False, user=Depends(require_roles("administrator", "manager"))):
-    rows = await db.devices.find({}, {"_id": 0}).sort("last_seen", -1).to_list(500)
+    # Revoked devices are intentionally excluded - deletion must actually
+    # remove them from this list, not just hide them behind a flag.
+    rows = await db.devices.find({"revoked": {"$ne": True}}, {"_id": 0}).sort("last_seen", -1).to_list(500)
     for d in rows:
         d["status"] = _device_status(d.get("last_seen"))
     if online_only:
@@ -132,10 +155,48 @@ async def rename_device(device_id: str, body: DeviceRenameIn, user=Depends(requi
     return {"ok": True, "friendly_name": name}
 
 
+@router.post("/devices/{device_id}/set-password")
+async def set_device_password(device_id: str, body: DeviceSetPasswordIn, user=Depends(require_roles("administrator"))):
+    """Admin-only. Sets/changes this device's credential, used going forward
+    to authenticate its own heartbeat/sync calls (X-Device-Secret header) -
+    independent of whichever human user is logged into the UI on that PC.
+    Devices that have never had a password set are completely unaffected."""
+    d = await db.devices.find_one({"id": device_id})
+    if not d:
+        raise HTTPException(404, "Device not found")
+    if d.get("revoked"):
+        raise HTTPException(400, "This device has been revoked. Register it again before assigning a credential.")
+    if len(body.password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+    await db.devices.update_one({"id": device_id}, {"$set": {"password_hash": hash_password(body.password)}})
+    # Never logs the password itself - only that a change happened, by whom, when.
+    await audit(user, "device_password_changed", "device", device_id, {"device_name": d.get("friendly_name")})
+    return {"ok": True}
+
+
+@router.delete("/devices/{device_id}")
+async def delete_device(device_id: str, user=Depends(require_device_delete_pin)):
+    """Admin + Master PIN gated. Soft-deletes (revokes) the device's own
+    registration only - students, receipts, payments, fees, expenses and
+    audit history are never touched by this endpoint. The device simply
+    cannot heartbeat/pull/push again until it registers under a fresh
+    device_id (see _check_device_auth above)."""
+    d = await db.devices.find_one({"id": device_id})
+    if not d:
+        raise HTTPException(404, "Device not found")
+    await db.devices.update_one({"id": device_id}, {"$set": {
+        "revoked": True, "revoked_at": now_iso(), "revoked_by": user["name"], "revoked_by_id": user["id"],
+    }})
+    await audit(user, "device_revoked", "device", device_id, {
+        "device_name": d.get("friendly_name"), "ip_address": d.get("ip_address"),
+    })
+    return {"ok": True}
+
+
 # ---------------- Sync: pull (server -> client master data) ----------------
 
 @router.get("/sync/pull")
-async def sync_pull(device_id: str, user=Depends(get_current_user)):
+async def sync_pull(device_id: str, x_device_secret: Optional[str] = Header(None), user=Depends(get_current_user)):
     """Everything a Client needs to keep working offline: enough student +
     fee-structure + master data to search a student, show their live fee
     position, and issue a receipt against the correct department/fee rules.
@@ -149,6 +210,8 @@ async def sync_pull(device_id: str, user=Depends(get_current_user)):
     record with no fee position. All heavy collections are fetched once and grouped
     in-memory below rather than queried per-student, to keep this cheap even though it
     runs on every periodic sync."""
+    existing_device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    await _check_device_auth(device_id, x_device_secret, existing_device)
     students = await db.students.find({"status": "active"}, {
         "_id": 0, "id": 1, "name": 1, "admission_no": 1, "class_id": 1, "section": 1,
         "medium": 1, "stream": 1, "department_id": 1, "fee_structure_id": 1,
@@ -256,7 +319,7 @@ async def sync_pull(device_id: str, user=Depends(get_current_user)):
 # ---------------- Sync: push (client -> server offline transactions) ----------------
 
 @router.post("/sync/push")
-async def sync_push(body: SyncPushIn, user=Depends(get_current_user)):
+async def sync_push(body: SyncPushIn, x_device_secret: Optional[str] = Header(None), user=Depends(get_current_user)):
     """Applies queued offline operations EXACTLY ONCE each, in order. Every
     operation is looked up by local_id in `sync_operations` first; if it was
     already applied (this push is a retry after a dropped connection, or the
@@ -264,6 +327,8 @@ async def sync_push(body: SyncPushIn, user=Depends(get_current_user)):
     is created again. Currently supports create_receipt only - the one
     genuinely money-moving offline action; other offline op types can be
     added the same way without touching this idempotency mechanism."""
+    existing_device = await db.devices.find_one({"id": body.device_id}, {"_id": 0})
+    await _check_device_auth(body.device_id, x_device_secret, existing_device)
     results = []
     applied_count = 0
     for op in body.operations:

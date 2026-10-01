@@ -546,6 +546,27 @@ async def require_student_edit_pin(
         raise HTTPException(403, "Invalid Master PIN")
     return user
 
+# ---------------- Client device deletion PIN gate ----------------
+# Same system-wide Master PIN as above (RECEIPT_DELETE_PIN_DOC_ID). Admin-only.
+# Deleting a device revokes ONLY its sync/auth registration (core.py devices
+# collection) - it never touches students/receipts/payments/accounting data.
+async def require_device_delete_pin(
+    device_id: str,
+    x_device_delete_pin: Optional[str] = Header(None),
+    user = Depends(require_roles("administrator")),
+):
+    doc = await db.security_config.find_one({"id": RECEIPT_DELETE_PIN_DOC_ID})
+    if not doc or not doc.get("pin_hash"):
+        await audit(user, "device_delete_failed", "device", device_id, {"reason": "pin_not_configured"})
+        raise HTTPException(500, "Master PIN is not configured on the server")
+    if not x_device_delete_pin:
+        await audit(user, "device_delete_failed", "device", device_id, {"reason": "missing_pin"})
+        raise HTTPException(401, "Master PIN required")
+    if not verify_password(x_device_delete_pin, doc["pin_hash"]):
+        await audit(user, "device_delete_failed", "device", device_id, {"reason": "invalid_pin"})
+        raise HTTPException(403, "Invalid Master PIN")
+    return user
+
 # ---------------- Settings helpers ----------------
 async def get_settings_doc():
     doc = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0})
@@ -761,6 +782,9 @@ class DeviceHeartbeatIn(BaseModel):
 
 class DeviceRenameIn(BaseModel):
     friendly_name: str
+
+class DeviceSetPasswordIn(BaseModel):
+    password: str
 
 class SyncOperationIn(BaseModel):
     """One queued offline action. `local_id` is a client-generated UUID and is
