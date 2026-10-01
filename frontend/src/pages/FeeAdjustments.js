@@ -330,7 +330,7 @@ function DetailModal({ app, isAdmin, onClose, onChanged }) {
                   <tr><td className="text-slate-500 py-1">Adjustment / Waiver</td><td className="text-right font-mono text-amber-700">{inr(app.financials.adjustment_amount)}</td></tr>
                   <tr><td className="text-slate-500 py-1 font-semibold">Final Fee After Adjustment</td><td className="text-right font-mono font-semibold">{inr(app.financials.final_fee)}</td></tr>
                   <tr><td className="text-slate-500 py-1">Amount Already Paid</td><td className="text-right font-mono text-emerald-700">{inr(app.financials.amount_already_paid)}</td></tr>
-                  <tr><td className="text-slate-500 py-1 font-semibold">Remaining Amount</td><td className="text-right font-mono font-semibold text-red-700">{inr(app.financials.remaining_amount)}</td></tr>
+                  <tr><td className="text-slate-500 py-1 font-semibold">Remaining Amount</td><td className="text-right font-mono font-bold text-slate-900">{inr(app.financials.remaining_amount)}</td></tr>
                 </tbody>
               </table>
             </div>

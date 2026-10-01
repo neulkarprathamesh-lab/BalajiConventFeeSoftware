@@ -136,10 +136,10 @@ const SECTIONS = [
         'Set it as the default printer',
         'Print a Windows test page to confirm',
       ]},
-      { h: 'Step 5 · First Login & Test Print', p: [
+      { h: 'Step 5 · First Login', p: [
         'Double-click the "Balaji FeeHub" desktop shortcut',
         'Sign in with your cashier / accountant credentials',
-        'Go to Diagnostics → click "Print test receipt"',
+        'Open any existing receipt and click Print to confirm the printer works',
       ]},
     ],
   },

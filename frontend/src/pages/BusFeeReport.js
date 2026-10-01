@@ -63,7 +63,7 @@ export default function BusFeeReport() {
           <F label="Student"><input value={filters.student} onChange={e=>setFilters({...filters, student: e.target.value})} className={inp} /></F>
           <F label="Admission No."><input value={filters.admission_no} onChange={e=>setFilters({...filters, admission_no: e.target.value})} className={inp} /></F>
           <F label="Class"><select value={filters.class_id} onChange={e=>setFilters({...filters, class_id: e.target.value})} className={inp}>
-            <option value="">All</option>{classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <option value="">All</option>{classes.filter(c => !['Fisheries', 'Electronics'].includes(c.stream)).map(c => <option key={c.id} value={c.id}>{c.name}{c.stream ? ` · ${c.stream}` : ''}</option>)}
           </select></F>
           <F label="Medium"><select value={filters.medium} onChange={e=>setFilters({...filters, medium: e.target.value})} className={inp}>
             <option value="">All</option><option>English Medium</option><option>Semi Medium (Marathi)</option><option>Junior College</option>

@@ -48,9 +48,8 @@ export default function Settings() {
         <div className="bg-white border border-slate-200 rounded p-5">
           <div className="flex items-center gap-2 mb-4"><Settings2 className="w-5 h-5 text-slate-600" /><h3 className="font-heading font-medium">Bus Fee & Approval Caps</h3></div>
           <div className="space-y-3">
-            <F label="Bus Months per Year (used when computing outstanding bus fee)"><input type="number" min="1" max="12" className={inp} value={s.bus_annual_months || 12} onChange={e=>set('bus_annual_months', parseInt(e.target.value) || 12)} /></F>
             <F label="Manager Waiver Cap (₹) — adjustments above this need administrator approval"><input type="number" min="0" className={inp} value={s.manager_waiver_cap ?? 5000} onChange={e=>set('manager_waiver_cap', parseFloat(e.target.value) || 0)} /></F>
-            <div className="text-[12px] text-slate-500">If a student's <span className="font-mono">bus_route</span> is set on the Students page, their fee notice adds <span className="font-mono">route.monthly_fee × months</span> to the outstanding.</div>
+            <div className="text-[12px] text-slate-500">Bus fee is tracked separately from academic fee (via bus stop assignments and bus charges) — see the Bus Fees report. It is not included in the Term Fee Notices outstanding total.</div>
           </div>
         </div>
 

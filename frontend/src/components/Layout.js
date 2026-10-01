@@ -2,11 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import api from '@/lib/api';
+import SyncStatus from '@/components/SyncStatus';
 
 const CURRENT_VERSION = '1.0.0';
 import {
-  LayoutDashboard, Users, Receipt, FileEdit, CalendarClock, Bell,
-  FileText, BarChart3, LogOut, Wallet, Shield, XCircle, Award, Bus, GraduationCap, Mail, Settings2, User as UserIcon, Lock as LockIcon, ClipboardList, BookOpen, Sunset, Rocket, Stethoscope, Bomb, Landmark
+  LayoutDashboard, Users, Receipt, FileEdit, Bell,
+  FileText, BarChart3, LogOut, Wallet, Shield, XCircle, Award, Bus, GraduationCap, Mail, Settings2, User as UserIcon, Lock as LockIcon, ClipboardList, BookOpen, Sunset, Rocket, Stethoscope, Bomb, Landmark, Archive, Fuel as ExpenseIcon, FileSpreadsheet, CalendarDays, MonitorSmartphone, KeyRound, DatabaseBackup
 } from 'lucide-react';
 
 const nav = [
@@ -15,11 +16,13 @@ const nav = [
   { to: '/import-excel', label: 'Excel Import', icon: FileText, roles: ['administrator','manager','accountant'] },
   { to: '/imports-history', label: 'Import History', icon: ClipboardList, roles: ['administrator','manager','accountant'] },
   { to: '/new-receipt', label: 'New Receipt', icon: Receipt, roles: ['*'] },
-  { to: '/finance', label: 'Finance / Voucher', icon: Wallet, roles: ['administrator','manager','accountant'] },
+  { to: '/finance', label: 'Finance / Voucher', icon: Wallet, roles: ['administrator','manager','accountant','cashier'] },
+  { to: '/expenses', label: 'Expenses', icon: ExpenseIcon, roles: ['administrator','manager','accountant','cashier'] },
+  { to: '/bill-entry', label: 'Bill Entry', icon: FileSpreadsheet, roles: ['administrator','manager','accountant','cashier'] },
+  { to: '/daily-fee-expense-report', label: 'Daily Fee & Expense Report', icon: CalendarDays, roles: ['administrator','manager','accountant'] },
   { to: '/receipts', label: 'Receipts', icon: FileText, roles: ['*'] },
-  { to: '/adjustments', label: 'Fee Adjustments (Legacy)', icon: FileEdit, roles: ['*'] },
+  { to: '/fee-adjustment-extension', label: 'Fee Adjustment / Extension', icon: FileEdit, roles: ['*'] },
   { to: '/fee-adjustment-applications', label: 'Fee Adjustment Applications', icon: Landmark, roles: ['*'] },
-  { to: '/extensions', label: 'Payment Extensions', icon: CalendarClock, roles: ['*'] },
   { to: '/reminders', label: 'Reminders', icon: Bell, roles: ['*'] },
   { to: '/bus-routes', label: 'Bus Routes', icon: Bus, roles: ['*'] },
   { to: '/bus-stops', label: 'Bus Stop Master', icon: Bus, roles: ['administrator','manager','accountant'] },
@@ -34,11 +37,17 @@ const nav = [
   { to: '/assign-students', label: 'Assign Students', icon: ClipboardList, roles: ['administrator','manager','accountant'] },
   { to: '/fee-structure', label: 'Fee Structure', icon: Wallet, roles: ['administrator','manager','accountant'] },
   { to: '/bulk-fee-update', label: 'Bulk Fee Detail Update', icon: Landmark, roles: ['administrator','manager','accountant'] },
+  { to: '/live-fee-update', label: 'Live Fee Update', icon: Landmark, roles: ['administrator','manager','accountant','cashier'] },
+  { to: '/fee-edit-access-requests', label: 'Fee Edit Access Requests', icon: KeyRound, roles: ['administrator','manager'] },
+  { to: '/live-bus-fee-update', label: 'Live Bus Fee Update', icon: Bus, roles: ['administrator','manager','accountant','cashier'] },
   { to: '/fee-brochure', label: 'Fee Brochure', icon: BookOpen, roles: ['*'] },
   { to: '/kiosk-poster', label: 'Kiosk QR Poster', icon: BookOpen, roles: ['administrator','manager','accountant'] },
+  { to: '/connected-pcs', label: 'Connected PCs', icon: MonitorSmartphone, roles: ['administrator', 'manager'] },
   { to: '/settings', label: 'Settings', icon: Settings2, roles: ['administrator'] },
   { to: '/config-snapshots', label: 'Config Snapshots', icon: BookOpen, roles: ['administrator','manager'] },
   { to: '/software-updates', label: 'Software Updates', icon: Rocket, roles: ['administrator','manager'] },
+  { to: '/receipt-archives', label: 'Receipt Archives', icon: Archive, roles: ['administrator'] },
+  { to: '/backup-disaster-recovery', label: 'Backup / Disaster Recovery', icon: DatabaseBackup, roles: ['administrator'] },
   { to: '/diagnostics', label: 'System Diagnostics', icon: Stethoscope, roles: ['*'] },
   { to: '/delivery-center', label: 'Delivery Center', icon: Rocket, roles: ['administrator'] },
   { to: '/factory-reset', label: 'Factory Reset', icon: Bomb, roles: ['administrator'] },
@@ -152,6 +161,7 @@ export default function Layout() {
               </span>
             </div>
           </div>
+          <SyncStatus />
           <button
             data-testid="profile-btn"
             onClick={() => navigate('/profile')}

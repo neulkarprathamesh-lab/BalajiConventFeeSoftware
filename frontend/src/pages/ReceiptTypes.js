@@ -305,8 +305,6 @@ const Field = ({ label, children, span = 1, required = false }) => (
 
 // ---------- Live Preview Modal ----------
 const PreviewModal = ({ rt, onClose }) => {
-  const [testCopy, setTestCopy] = useState(false);
-  const doTestPrint = () => { setTestCopy(true); setTimeout(() => { doPrint(paper); setTestCopy(false); }, 200); };
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
   const paper = rt?.paper_size || 'A4';
@@ -316,8 +314,8 @@ const PreviewModal = ({ rt, onClose }) => {
   const show = (k) => F[k] !== false;
   const qrOn = rt?.qr_enabled !== false;
   const barcodeOn = !!rt?.barcode_enabled;
-  const wmOn = !!rt?.watermark_enabled || testCopy;
-  const wmText = testCopy ? 'TEST COPY' : (rt?.watermark_text || 'OFFICIAL');
+  const wmOn = !!rt?.watermark_enabled;
+  const wmText = rt?.watermark_text || 'OFFICIAL';
   const sampleNumber = `${rt?.code || 'PRE'}-2026-000999`;
   return (
     <div className="fixed inset-0 bg-slate-900/70 z-50 flex items-start justify-center p-4 overflow-y-auto print:relative print:bg-white print:p-0" onClick={onClose}>
@@ -329,7 +327,6 @@ const PreviewModal = ({ rt, onClose }) => {
             <div className="text-[11px] text-slate-500">Paper: {paper} · {orient} · reflects unsaved changes · WYSIWYG</div>
           </div>
           <div className="flex gap-2">
-            <button onClick={doTestPrint} data-testid="rtm-test-print" className="h-9 px-4 bg-amber-500 hover:bg-amber-600 text-white rounded text-sm font-semibold">Test Print</button>
             <button onClick={()=>doPrint(paper)} className="h-9 px-4 bg-slate-900 text-white rounded text-sm font-semibold">Print</button>
             <button onClick={onClose} className="h-9 px-3 border border-slate-300 rounded text-sm">Close</button>
           </div>
@@ -337,7 +334,7 @@ const PreviewModal = ({ rt, onClose }) => {
         <div className="p-6 relative text-[13px] text-slate-900">
           {wmOn && (
             <div aria-hidden className="absolute inset-0 pointer-events-none flex items-center justify-center print:flex" style={{ zIndex: 0 }}>
-              <div className={`font-heading font-black text-[120px] tracking-tighter rotate-[-24deg] ${testCopy ? 'text-red-600 opacity-30' : 'text-slate-900 opacity-[0.06]'} select-none`}>{wmText}</div>
+              <div className="font-heading font-black text-[120px] tracking-tighter rotate-[-24deg] text-slate-900 opacity-[0.06] select-none">{wmText}</div>
             </div>
           )}
           <div className="relative bg-slate-900 text-white flex items-center justify-between px-4 py-2 -mx-6 -mt-6 mb-4">

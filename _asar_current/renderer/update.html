@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Balaji FeeHub - Check for Updates</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .update-shell { max-width: 640px; padding: 32px 28px; }
+    .version-row { display: flex; gap: 24px; margin: 18px 0; }
+    .version-box { flex: 1; background: rgba(226,232,240,0.05); border: 1px solid rgba(226,232,240,0.08); border-radius: 8px; padding: 12px 16px; }
+    .version-box .label { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #94a3b8; margin-bottom: 4px; }
+    .version-box .value { font-size: 20px; font-weight: 600; color: #f8fafc; font-family: 'Consolas', monospace; }
+    .version-box.upgrade .value { color: #34d399; }
+    .notes { background: rgba(15,23,42,0.6); border-radius: 8px; padding: 14px 16px; font-size: 13px; line-height: 1.55; margin: 16px 0; max-height: 220px; overflow-y: auto; white-space: pre-wrap; }
+    .size-badge { display: inline-block; background: #0f766e; color: #ecfeff; font-weight: 600; padding: 4px 10px; border-radius: 999px; font-size: 12px; }
+    .pin-row { margin: 14px 0; }
+    .pin-row input { font-family: 'Consolas', monospace; font-size: 18px; letter-spacing: 4px; text-align: center; padding: 10px 12px; width: 160px; }
+    .progress-shell { background: rgba(226,232,240,0.08); border-radius: 999px; overflow: hidden; height: 8px; margin: 12px 0; }
+    .progress-bar { background: linear-gradient(90deg, #0f766e, #34d399); height: 100%; width: 0%; transition: width 0.2s ease; }
+    .phase-line { font-size: 13px; color: #94a3b8; margin: 6px 0; font-family: 'Consolas', monospace; }
+    .fallback-link { color: #94a3b8; font-size: 12px; text-decoration: underline; cursor: pointer; }
+    .hidden { display: none !important; }
+    .ok-banner { background: rgba(52,211,153,0.12); border: 1px solid rgba(52,211,153,0.3); color: #34d399; padding: 12px 14px; border-radius: 8px; margin: 14px 0; }
+    .err-banner { background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3); color: #fca5a5; padding: 12px 14px; border-radius: 8px; margin: 14px 0; }
+  </style>
+</head>
+<body>
+  <main class="wrap update-shell">
+    <header class="brand">
+      <div class="brand-mark"><div class="mark-inner">B</div></div>
+      <div class="brand-text">
+        <h1>Balaji FeeHub</h1>
+        <p>Check for Updates</p>
+      </div>
+    </header>
+
+    <section id="checking" class="panel">
+      <div class="spinner"></div>
+      <h2>Checking for updates...</h2>
+      <p class="hint">Contacting GitHub. This takes a few seconds.</p>
+    </section>
+
+    <section id="uptodate" class="panel hidden">
+      <h2>You are on the latest version</h2>
+      <div class="version-row">
+        <div class="version-box"><div class="label">Installed</div><div class="value" id="installed-version">1.0.0</div></div>
+      </div>
+      <p class="hint">Balaji FeeHub will automatically check again next time you launch it.</p>
+      <div class="actions"><button class="btn-secondary" data-testid="update-close-btn" id="close-btn">Close</button></div>
+    </section>
+
+    <section id="available" class="panel hidden">
+      <h2>A new version is available</h2>
+      <div class="version-row">
+        <div class="version-box"><div class="label">Installed</div><div class="value" id="installed-version-2">1.0.0</div></div>
+        <div class="version-box upgrade"><div class="label">Available</div><div class="value" id="remote-version">1.0.1</div></div>
+      </div>
+      <p>Download size: <span class="size-badge" id="dl-size" data-testid="update-size">- MB</span></p>
+      <div class="notes" id="release-notes" data-testid="update-notes">-</div>
+      <div class="pin-row">
+        <label for="admin-email">Administrator Email</label><br />
+        <input id="admin-email" data-testid="update-admin-email" type="email" placeholder="admin@balajiconvent.in" autocomplete="off" style="width: 260px; letter-spacing: normal; font-size: 14px; text-align: left;" />
+      </div>
+      <div class="pin-row">
+        <label for="admin-password">Administrator Password</label><br />
+        <input id="admin-password" data-testid="update-admin-password" type="password" autocomplete="off" style="width: 260px; letter-spacing: normal; font-size: 14px; text-align: left;" />
+      </div>
+      <div class="pin-row">
+        <label for="admin-pin">Administrator PIN</label><br />
+        <input id="admin-pin" data-testid="update-admin-pin" type="password" inputmode="numeric" maxlength="8" placeholder="****" autocomplete="off" />
+      </div>
+      <div class="actions">
+        <button id="update-now" class="btn-primary" data-testid="update-now-btn">Update Now</button>
+        <button id="later" class="btn-secondary" data-testid="update-later-btn">Later</button>
+      </div>
+      <p class="fallback-link" id="full-installer-link" data-testid="update-full-installer-link">Prefer the full installer? Click here.</p>
+    </section>
+
+    <section id="progress" class="panel hidden">
+      <h2 id="progress-title">Downloading update...</h2>
+      <div class="progress-shell"><div class="progress-bar" id="progress-bar"></div></div>
+      <div class="phase-line" id="phase-line">Starting...</div>
+    </section>
+
+    <section id="success" class="panel hidden">
+      <div class="ok-banner">
+        Update installed successfully. The backend is restarting; the app will reconnect in a few seconds.
+      </div>
+      <p><strong>New version:</strong> <span id="new-version">-</span></p>
+      <div class="actions"><button class="btn-primary" data-testid="update-restart-btn" id="restart-btn">Reconnect Now</button></div>
+    </section>
+
+    <section id="failure" class="panel hidden">
+      <div class="err-banner" id="error-message">Update failed.</div>
+      <p class="hint">Your existing installation is untouched. You can retry, or use the full installer as a recovery option.</p>
+      <div class="actions">
+        <button class="btn-secondary" id="retry-btn" data-testid="update-retry-btn">Retry</button>
+        <button class="btn-secondary" id="fallback-btn" data-testid="update-fallback-btn">Download Full Installer</button>
+        <button class="btn-secondary" id="close-btn-2" data-testid="update-close-btn-2">Close</button>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <span></span>
+      <span id="installed-footer">Balaji FeeHub</span>
+    </footer>
+  </main>
+
+  <script src="update.js"></script>
+</body>
+</html>

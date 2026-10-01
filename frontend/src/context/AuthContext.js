@@ -15,8 +15,27 @@ export const AuthProvider = ({ children }) => {
       try {
         const { data } = await api.get('/auth/me');
         setUser(data);
+        localStorage.setItem('bc_user_cache', JSON.stringify(data));
         if (localStorage.getItem('bc_locked') === '1') setLockedState(true);
-      } catch (e) { localStorage.removeItem('bc_token'); }
+      } catch (e) {
+        if (e.response) {
+          // A real rejection (401/403 - token genuinely invalid, expired, or
+          // revoked) - the existing behavior of signing the user out locally.
+          localStorage.removeItem('bc_token');
+          localStorage.removeItem('bc_user_cache');
+        } else {
+          // Server unreachable, not a real auth rejection - the Client must
+          // still open into the last-known-authenticated session (offline
+          // student search / fee viewing / receipt queuing all depend on
+          // this) rather than bouncing to Login just because it briefly
+          // cannot re-verify the token over the network.
+          try {
+            const cached = JSON.parse(localStorage.getItem('bc_user_cache') || 'null');
+            if (cached) setUser(cached);
+            if (localStorage.getItem('bc_locked') === '1') setLockedState(true);
+          } catch (_) { /* no usable cached session - falls through to Login as before */ }
+        }
+      }
       setLoading(false);
     };
     load();
@@ -25,6 +44,7 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     const { data } = await api.post('/auth/login', { email, password });
     localStorage.setItem('bc_token', data.token);
+    localStorage.setItem('bc_user_cache', JSON.stringify(data.user));
     localStorage.removeItem('bc_locked');
     setLockedState(false);
     setUser(data.user);
@@ -34,6 +54,7 @@ export const AuthProvider = ({ children }) => {
   const logout = async () => {
     try { await api.post('/auth/logout'); } catch (e) {}
     localStorage.removeItem('bc_token');
+    localStorage.removeItem('bc_user_cache');
     localStorage.removeItem('bc_locked');
     setLockedState(false);
     setUser(null);

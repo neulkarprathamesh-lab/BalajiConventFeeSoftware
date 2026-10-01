@@ -11,6 +11,9 @@ import NewReceipt from '@/pages/NewReceipt';
 import ReceiptTypeSelector from '@/pages/ReceiptTypeSelector';
 import ReceiptTypes from '@/pages/ReceiptTypes';
 import Finance from '@/pages/Finance';
+import Expenses from '@/pages/Expenses';
+import BillEntry from '@/pages/BillEntry';
+import DailyFeeExpenseReport from '@/pages/DailyFeeExpenseReport';
 import ConfigExportImport from '@/pages/ConfigExportImport';
 import NewReceiptAdvanced from '@/pages/NewReceiptAdvanced';
 import Receipts from '@/pages/Receipts';
@@ -18,9 +21,13 @@ import ReceiptView from '@/pages/ReceiptView';
 import Adjustments from '@/pages/Adjustments';
 import FeeAdjustments from '@/pages/FeeAdjustments';
 import Extensions from '@/pages/Extensions';
+import FeeAdjustmentExtension from '@/pages/FeeAdjustmentExtension';
 import Reminders from '@/pages/Reminders';
 import Reports from '@/pages/Reports';
 import FeeStructure from '@/pages/FeeStructure';
+import LiveFeeUpdate from '@/pages/LiveFeeUpdate';
+import FeeEditAccessRequests from '@/pages/FeeEditAccessRequests';
+import LiveBusFeeUpdate from '@/pages/LiveBusFeeUpdate';
 import BulkFeeUpdate from '@/pages/BulkFeeUpdate';
 import BusFeeReport from '@/pages/BusFeeReport';
 import Admin from '@/pages/Admin';
@@ -33,6 +40,7 @@ import BusFees from '@/pages/BusFees';
 import FeeNotices from '@/pages/FeeNotices';
 import Profile from '@/pages/Profile';
 import Settings from '@/pages/Settings';
+import ConnectedPCs from '@/pages/ConnectedPCs';
 import AssignStudents from '@/pages/AssignStudents';
 import FeeBrochure from '@/pages/FeeBrochure';
 import Defaulters from '@/pages/Defaulters';
@@ -48,7 +56,9 @@ import Diagnostics from '@/pages/Diagnostics';
 import DeliveryCenter from '@/pages/DeliveryCenter';
 import ConfigSnapshots from '@/pages/ConfigSnapshots';
 import SoftwareUpdates from '@/pages/SoftwareUpdates';
+import ReceiptArchives from '@/pages/ReceiptArchives';
 import FactoryReset from '@/pages/FactoryReset';
+import BackupDisasterRecovery from '@/pages/BackupDisasterRecovery';
 import LockScreen from '@/components/LockScreen';
 import '@/index.css';
 
@@ -74,10 +84,14 @@ export default function App() {
             <Route path="new-receipt" element={<ReceiptTypeSelector />} />
             <Route path="new-receipt/entry" element={<NewReceipt />} />
             <Route path="new-receipt-advanced" element={<NewReceiptAdvanced />} />
-            <Route path="finance" element={<Protected roles={['administrator','manager','accountant']}><Finance /></Protected>} />
+            <Route path="finance" element={<Protected roles={['administrator','manager','accountant','cashier']}><Finance /></Protected>} />
+            <Route path="expenses" element={<Protected roles={['administrator','manager','accountant','cashier']}><Expenses /></Protected>} />
+            <Route path="bill-entry" element={<Protected roles={['administrator','manager','accountant','cashier']}><BillEntry /></Protected>} />
+            <Route path="daily-fee-expense-report" element={<Protected roles={['administrator','manager','accountant']}><DailyFeeExpenseReport /></Protected>} />
             <Route path="receipt-types" element={<Protected roles={['administrator']}><ReceiptTypes /></Protected>} />
             <Route path="config-io" element={<Protected roles={['administrator']}><ConfigExportImport /></Protected>} />
             <Route path="receipts" element={<Receipts />} />
+            <Route path="fee-adjustment-extension" element={<FeeAdjustmentExtension />} />
             <Route path="adjustments" element={<Adjustments />} />
             <Route path="fee-adjustment-applications" element={<FeeAdjustments />} />
             <Route path="extensions" element={<Extensions />} />
@@ -95,9 +109,13 @@ export default function App() {
             <Route path="fee-notices" element={<FeeNotices />} />
             <Route path="profile" element={<Profile />} />
             <Route path="settings" element={<Protected roles={['administrator']}><Settings /></Protected>} />
+            <Route path="connected-pcs" element={<Protected roles={['administrator','manager']}><ConnectedPCs /></Protected>} />
             <Route path="fee-structure" element={<Protected roles={['administrator','manager','accountant']}><FeeStructure /></Protected>} />
             <Route path="bulk-fee-update" element={<Protected roles={['administrator','manager','accountant']}><BulkFeeUpdate /></Protected>} />
             <Route path="bus-fee-report" element={<Protected roles={['administrator','manager','accountant']}><BusFeeReport /></Protected>} />
+            <Route path="live-fee-update" element={<Protected roles={['administrator','manager','accountant','cashier']}><LiveFeeUpdate /></Protected>} />
+            <Route path="live-bus-fee-update" element={<Protected roles={['administrator','manager','accountant','cashier']}><LiveBusFeeUpdate /></Protected>} />
+            <Route path="fee-edit-access-requests" element={<Protected roles={['administrator','manager']}><FeeEditAccessRequests /></Protected>} />
             <Route path="fee-brochure" element={<FeeBrochure />} />
             <Route path="kiosk-poster" element={<Protected roles={['administrator','manager','accountant']}><KioskPoster /></Protected>} />
             <Route path="assign-students" element={<Protected roles={['administrator','manager','accountant']}><AssignStudents /></Protected>} />
@@ -107,6 +125,8 @@ export default function App() {
             <Route path="delivery-center" element={<Protected roles={['administrator']}><DeliveryCenter /></Protected>} />
             <Route path="config-snapshots" element={<Protected roles={['administrator','manager']}><ConfigSnapshots /></Protected>} />
             <Route path="software-updates" element={<Protected roles={['administrator','manager']}><SoftwareUpdates /></Protected>} />
+            <Route path="receipt-archives" element={<Protected roles={['administrator']}><ReceiptArchives /></Protected>} />
+            <Route path="backup-disaster-recovery" element={<Protected roles={['administrator']}><BackupDisasterRecovery /></Protected>} />
             <Route path="factory-reset" element={<Protected roles={['administrator']}><FactoryReset /></Protected>} />
             <Route path="diagnostics" element={<Diagnostics />} />
             <Route path="dashboard" element={<Navigate to="/" replace />} />

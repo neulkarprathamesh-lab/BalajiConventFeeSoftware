@@ -14,7 +14,9 @@ export default function Admin() {
   const [deptOpen, setDeptOpen] = useState(false);
   const [deptForm, setDeptForm] = useState({ name:'', code:'', academic_year:'2026-27' });
   const [classOpen, setClassOpen] = useState(false);
-  const [classForm, setClassForm] = useState({ department_id:'', name:'', section:'' });
+  const [classForm, setClassForm] = useState({ department_id:'', name:'', section:'', stream:'' });
+  const classFormIsJC = depts.find(d => d.id === classForm.department_id)?.code === 'JC';
+  const JC_STREAMS = ['Arts', 'Commerce', 'Science', 'Bi-Focal'];
 
   const load = () => {
     api.get('/users').then(r => setUsers(r.data));
@@ -36,10 +38,16 @@ export default function Admin() {
   const submitClass = async (e) => {
     e.preventDefault();
     if (!classForm.department_id) return toast.error('Select a department');
+    if (classFormIsJC && !classForm.stream) return toast.error('Select a Stream for a Junior College class');
     try {
-      await api.post('/classes', { ...classForm, section: classForm.section || null });
+      await api.post('/classes', {
+        department_id: classForm.department_id, name: classForm.name,
+        section: classForm.section || null,
+        medium: classFormIsJC ? 'Junior College' : null,
+        stream: classFormIsJC ? classForm.stream : null,
+      });
       toast.success('Class created');
-      setClassOpen(false); setClassForm({ department_id:'', name:'', section:'' }); load();
+      setClassOpen(false); setClassForm({ department_id:'', name:'', section:'', stream:'' }); load();
     } catch (ex) { toast.error(ex?.response?.data?.detail || 'Failed to create class'); }
   };
 
@@ -114,12 +122,12 @@ export default function Admin() {
                 <button data-testid="admin-new-class" onClick={()=>setClassOpen(true)} className="h-8 px-3 bg-blue-600 text-white rounded text-[12px] hover:bg-blue-700">New Class</button>
               </div>
               <table className="w-full dense-table">
-                <thead><tr className="text-left text-[11px] uppercase tracking-wide text-slate-600"><th>Department</th><th>Class</th><th>Section</th></tr></thead>
+                <thead><tr className="text-left text-[11px] uppercase tracking-wide text-slate-600"><th>Department</th><th>Class</th><th>Stream</th><th>Section</th></tr></thead>
                 <tbody>
-                  {classes.length === 0 && <tr><td colSpan="3" className="p-4 text-center text-slate-500 text-[13px]">No classes yet</td></tr>}
+                  {classes.length === 0 && <tr><td colSpan="4" className="p-4 text-center text-slate-500 text-[13px]">No classes yet</td></tr>}
                   {classes.map(c => {
                     const d = depts.find(x=>x.id===c.department_id);
-                    return <tr key={c.id}><td className="text-[12px] text-slate-600">{d?.name || '—'}</td><td className="font-medium">{c.name}</td><td className="text-[12px] text-slate-500">{c.section || '—'}</td></tr>;
+                    return <tr key={c.id}><td className="text-[12px] text-slate-600">{d?.name || '—'}</td><td className="font-medium">{c.name}</td><td className="text-[12px] text-slate-500">{c.stream || '—'}</td><td className="text-[12px] text-slate-500">{c.section || '—'}</td></tr>;
                   })}
                 </tbody>
               </table>
@@ -227,11 +235,17 @@ export default function Admin() {
           <form onSubmit={submitClass} onClick={e=>e.stopPropagation()} className="bg-white rounded shadow-lg w-full max-w-md">
             <div className="px-5 py-3 border-b border-slate-200 font-heading font-medium">New Class</div>
             <div className="p-5 space-y-3">
-              <F label="Department"><select required data-testid="admin-class-dept" className={inp} value={classForm.department_id} onChange={e=>setClassForm({...classForm,department_id:e.target.value})}>
+              <F label="Department"><select required data-testid="admin-class-dept" className={inp} value={classForm.department_id} onChange={e=>setClassForm({...classForm,department_id:e.target.value,stream:''})}>
                 <option value="">Select…</option>{depts.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
               </select></F>
-              <F label="Class Name"><input required data-testid="admin-class-name" className={inp} value={classForm.name} onChange={e=>setClassForm({...classForm,name:e.target.value})} placeholder="e.g. Class 11 - Arts" /></F>
-              <F label="Section (optional)"><input className={inp} value={classForm.section} onChange={e=>setClassForm({...classForm,section:e.target.value})} placeholder="e.g. A" /></F>
+              <F label="Class Name"><input required data-testid="admin-class-name" className={inp} value={classForm.name} onChange={e=>setClassForm({...classForm,name:e.target.value})} placeholder={classFormIsJC ? 'e.g. Class 11' : 'e.g. Class 6'} /></F>
+              {classFormIsJC ? (
+                <F label="Stream"><select required data-testid="admin-class-stream" className={inp} value={classForm.stream} onChange={e=>setClassForm({...classForm,stream:e.target.value})}>
+                  <option value="">Select…</option>{JC_STREAMS.map(s=><option key={s} value={s}>{s}</option>)}
+                </select></F>
+              ) : (
+                <F label="Section (optional)"><input className={inp} value={classForm.section} onChange={e=>setClassForm({...classForm,section:e.target.value})} placeholder="e.g. A" /></F>
+              )}
             </div>
             <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-200 bg-slate-50">
               <button type="button" onClick={()=>setClassOpen(false)} className="h-9 px-3 border border-slate-300 rounded text-sm">Cancel</button>

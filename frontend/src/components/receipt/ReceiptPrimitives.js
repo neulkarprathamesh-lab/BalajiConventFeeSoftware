@@ -1,5 +1,5 @@
 import React from 'react';
-import { QRCodeSVG } from 'qrcode.react';
+import { Bus as BusIconLucide } from 'lucide-react';
 
 export const LOGO = '/school-logo.jpeg';
 
@@ -60,15 +60,10 @@ export function ReceiptHeader({
       <div className="col-span-3 flex justify-between gap-1.5">
         <div>
           <MiniField label="Receipt No." value={<span className="font-bold" style={{ color: '#C62828' }}>{receiptNumber}</span>} compact={compact} />
-          <MiniField label="Date" value={<span className="font-semibold">{dateStr}</span>} compact={compact} underline />
-          {academicYear && <MiniField label="Academic Year" value={<span className="font-semibold">{academicYear}</span>} compact={compact} />}
+          <MiniField label="Date:" value={<span className="font-semibold">{dateStr}</span>} compact={compact} />
+          {academicYear && <MiniField label="Academic Year:" value={<span className="font-semibold">{academicYear}</span>} compact={compact} />}
         </div>
-        <div className="flex flex-col items-end shrink-0">
-          {showBarcode && receiptNumber && <Barcode text={receiptNumber} compact={compact} />}
-          {qrEnabled && qrValue && (
-            <div className="mt-0.5"><QRCodeSVG value={qrValue} size={compact ? 34 : 46} level="M" includeMargin={false} /></div>
-          )}
-        </div>
+        <div className="flex flex-col items-end shrink-0" />
       </div>
     </div>
   );
@@ -76,9 +71,9 @@ export function ReceiptHeader({
 
 function MiniField({ label, value, compact, underline = false }) {
   return (
-    <div className={compact ? 'mb-0' : 'mb-1.5'}>
-      <div className={`uppercase tracking-wide text-black font-bold ${compact ? 'text-[7px]' : 'text-[8.5px]'}`}>{label}</div>
-      <div className={`leading-snug pb-[1px] ${compact ? 'text-[9.5px]' : 'text-[11px]'} ${underline ? 'border-b border-slate-400 min-w-[46px] inline-block' : ''}`}>{value}</div>
+    <div className={`flex items-baseline gap-1 whitespace-nowrap ${compact ? 'mb-0' : 'mb-0.5'}`}>
+      <span className={`uppercase tracking-wide text-black font-bold shrink-0 ${compact ? 'text-[7px]' : 'text-[8.5px]'}`}>{label}</span>
+      <span className={`leading-snug ${compact ? 'text-[9.5px]' : 'text-[11px]'} ${underline ? 'border-b border-slate-400 min-w-[46px] inline-block' : ''}`}>{value}</span>
     </div>
   );
 }
@@ -91,18 +86,22 @@ export function Barcode({ text = '', compact = false }) {
   const s = (text || '').toUpperCase();
   let seed = 0;
   for (let i = 0; i < s.length; i++) seed = (seed * 31 + s.charCodeAt(i)) >>> 0;
-  const n = compact ? 34 : 44;
+  // Bar count/width kept small and bounded (worst case n*3px) so the barcode's
+  // natural footprint always fits inside its narrow header column, measured
+  // against the real column width (rightcol ~177px minus the Receipt No./
+  // Date/Academic Year block's own ~126-132px) — n=16 gives a worst-case 48px
+  // vs the ~45px actually left over, with the maxWidth+overflow below as a
+  // safety net on top, not the primary fix.
+  const n = compact ? 16 : 24;
   for (let i = 0; i < n; i++) {
     seed = (seed * 1103515245 + 12345) >>> 0;
-    const w = (seed % 3) + 1;
-    const gap = ((seed >> 8) % 2) + 1;
-    bars.push(<div key={`${i}b`} style={{ width: `${w}px`, height: compact ? 26 : 34, background: '#000', display: 'inline-block' }} />);
-    bars.push(<div key={`${i}g`} style={{ width: `${gap}px`, display: 'inline-block' }} />);
+    const w = (seed % 2) + 1;
+    bars.push(<div key={`${i}b`} style={{ width: `${w}px`, height: compact ? 20 : 26, background: '#000', display: 'inline-block', marginRight: '1px' }} />);
   }
   return (
-    <div className="text-right">
+    <div className="text-right" style={{ maxWidth: compact ? 50 : 68, overflow: 'hidden', marginRight: 2 }}>
       <div className="inline-flex">{bars}</div>
-      <div className={`font-mono tracking-[0.1em] text-right ${compact ? 'text-[7px]' : 'text-[8px]'}`}>{text}</div>
+      <div className={`font-mono tracking-[0.05em] text-right truncate ${compact ? 'text-[6.5px]' : 'text-[7.5px]'}`}>{text}</div>
     </div>
   );
 }
@@ -137,7 +136,7 @@ export function SignatureBlock({
 export function ReceivedAuthorizedBlock({ compact = false }) {
   const boxH = compact ? 'h-4' : 'h-9';
   return (
-    <div className="grid grid-cols-2 gap-8 mt-1">
+    <div className="grid grid-cols-2 gap-8 mt-0">
       {['RECEIVED BY', 'AUTHORIZED BY'].map(label => (
         <div key={label} className="text-center">
           <div className={boxH} />
@@ -188,9 +187,6 @@ export function ReceiptFooter({
 }) {
   return (
     <div className="mt-0.5 pt-0.5 border-t-2" style={{ borderColor: '#111' }}>
-      <div className="flex items-start justify-between gap-4">
-        <NotesList notes={notes} compact={compact} />
-      </div>
       {showSignatures && (signatureNode || <ReceivedAuthorizedBlock compact={compact} />)}
       {remarks && (
         <div className={`${compact ? 'text-[8px]' : 'text-[10.5px]'} mt-1 text-slate-700`}>
@@ -215,12 +211,30 @@ export function StatusRibbons({ status, reprintCount }) {
   );
 }
 
-/** Watermark that shows on-screen AND in print — the real school logo, very faint, behind the content. */
-export function Watermark({ enabled = false, opacity = 0.05 }) {
+/**
+ * Watermark — the real school logo, faint, behind the content on every
+ * receipt type except Bus, which shows a bus icon instead (variant="bus").
+ * Opacity raised from an earlier 0.05 — physical printing on the monochrome
+ * P1007 showed that a 5%-opacity image falls below the printer's minimum
+ * halftone dot threshold and simply doesn't appear on paper at all, even
+ * though it renders fine on screen. Raised again from 0.14 to 0.165 (~+18%)
+ * for slightly better visibility — still a subtle background watermark, not
+ * bold, and stays well clear of text readability.
+ */
+export function Watermark({ enabled = false, opacity = 0.165, variant = 'logo' }) {
   if (!enabled) return null;
+  // Constrained to the TOP ~65% of the receipt's own height (not the full
+  // frame) — a hard boundary, not just a smaller image — so the watermark's
+  // bottom edge always clears the Balance Remaining section further down,
+  // regardless of exact content heights. Still horizontally centered across
+  // the full width, so it still reads as centered behind the page.
   return (
-    <div aria-hidden className="absolute inset-0 pointer-events-none flex items-center justify-center" style={{ zIndex: 0 }}>
-      <img src={LOGO} alt="" style={{ width: '42%', opacity, userSelect: 'none' }} />
+    <div aria-hidden className="absolute inset-x-0 top-0 pointer-events-none flex items-center justify-center" style={{ zIndex: 0, height: '65%' }}>
+      {variant === 'bus' ? (
+        <BusIconLucide style={{ width: '26%', height: 'auto', maxHeight: '100%', opacity, color: '#000' }} strokeWidth={1.25} />
+      ) : (
+        <img src={LOGO} alt="" style={{ width: '32%', maxHeight: '100%', objectFit: 'contain', opacity, userSelect: 'none' }} />
+      )}
     </div>
   );
 }
@@ -240,7 +254,7 @@ export function BalanceRemaining({ amount, loading = false, staleYear = false, c
       <div className={`uppercase tracking-widest font-bold ${compact ? 'text-[8px]' : 'text-[10px]'} text-slate-700`}>
         Balance Remaining{staleYear ? ' (current AY)' : ''}
       </div>
-      <div className={`font-black font-mono ${compact ? 'text-[11px]' : 'text-[15px]'}`} style={{ color: amount > 0.004 ? '#C62828' : '#1a7f37' }}>
+      <div className={`font-black font-mono ${compact ? 'text-[11px]' : 'text-[15px]'}`} style={{ color: '#000000' }}>
         {loading ? '…' : `₹ ${inrPrint(amount)}`}
       </div>
     </div>

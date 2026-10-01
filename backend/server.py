@@ -27,6 +27,12 @@ from routers import updates as updates_router  # noqa: E402
 from routers import production as production_router  # noqa: E402
 from routers import fee_details as fee_details_router  # noqa: E402
 from routers import fee_adjustments as fee_adjustments_router  # noqa: E402
+from routers import receipt_archives as receipt_archives_router  # noqa: E402
+from routers import accounting as accounting_router  # noqa: E402
+from routers import sync as sync_router  # noqa: E402
+from routers import fee_edit_access as fee_edit_access_router  # noqa: E402
+from routers import system_backup as system_backup_router  # noqa: E402
+import backup_engine  # noqa: E402
 import asyncio  # noqa: E402
 
 app = FastAPI(title="Balaji Convent Fee Software")
@@ -41,9 +47,15 @@ app.include_router(diagnostics_router.router)
 app.include_router(deliverables_router.router)
 app.include_router(snapshots_router.router)
 app.include_router(updates_router.router)
+app.include_router(updates_router.client_router)
 app.include_router(production_router.router)
 app.include_router(fee_details_router.router)
 app.include_router(fee_adjustments_router.router)
+app.include_router(receipt_archives_router.router)
+app.include_router(accounting_router.router)
+app.include_router(sync_router.router)
+app.include_router(fee_edit_access_router.router)
+app.include_router(system_backup_router.router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -55,21 +67,25 @@ app.add_middleware(
 
 _scheduler_task = None
 _bus_scheduler_task = None
+_backup_scheduler_task = None
 
 @app.on_event("startup")
 async def on_startup():
-    global _scheduler_task, _bus_scheduler_task
+    global _scheduler_task, _bus_scheduler_task, _backup_scheduler_task
     await seed_data()
     _scheduler_task = asyncio.create_task(diagnostics_router.daily_diagnostics_scheduler())
     _bus_scheduler_task = asyncio.create_task(students_router.monthly_bus_charge_scheduler())
+    _backup_scheduler_task = asyncio.create_task(backup_engine.daily_backup_scheduler())
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    global _scheduler_task, _bus_scheduler_task
+    global _scheduler_task, _bus_scheduler_task, _backup_scheduler_task
     if _scheduler_task:
         _scheduler_task.cancel()
     if _bus_scheduler_task:
         _bus_scheduler_task.cancel()
+    if _backup_scheduler_task:
+        _backup_scheduler_task.cancel()
     client.close()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

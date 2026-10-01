@@ -2,7 +2,10 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
+import { useAuth } from '@/context/AuthContext';
 import { Calendar, CalendarDays, CalendarRange, XCircle, RotateCcw } from 'lucide-react';
+import { DustbinButton } from '@/components/receipt/DeleteReceiptFlow';
+import useLiveRefresh from '@/lib/useLiveRefresh';
 
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
 const endOfDay = (d) => { const x = new Date(d); x.setHours(23,59,59,999); return x; };
@@ -22,6 +25,10 @@ const CHIPS = [
 ];
 
 export default function Receipts() {
+  const { user } = useAuth();
+  // Matches ReceiptView.js's canDelete exactly - the backend independently
+  // re-checks role + the deletion PIN on every call regardless of this.
+  const canDelete = ['administrator', 'manager'].includes(user?.role);
   const [rows, setRows] = useState([]);
   const [type, setType] = useState('');
   const [q, setQ] = useState('');
@@ -40,6 +47,11 @@ export default function Receipts() {
     api.get(`/receipts?${p.toString()}`).then(r => setRows(r.data));
   };
   useEffect(() => { load(); }, [df, dt, type]);
+  // Covers receipts, cancellations/void, refunds, and Debit Vouchers - all
+  // of these are just rows in this same list, filtered by receipt_type/
+  // status, so one shared live-refresh keeps every one of them current
+  // while this screen is left open on any PC.
+  useLiveRefresh(load, 10000);
 
   const applyChip = (c) => {
     if (chip === c.v) { // toggle off
@@ -113,9 +125,9 @@ export default function Receipts() {
 
         <div className="bg-white border border-slate-200 rounded overflow-hidden">
           <table className="w-full dense-table">
-            <thead><tr className="text-left text-[11px] uppercase tracking-wide text-slate-600"><th>Number</th><th>Type</th><th>Payer</th><th>Dept</th><th>Mode</th><th className="text-right">Amount</th><th>Cashier</th><th>Status</th><th>Date</th></tr></thead>
+            <thead><tr className="text-left text-[11px] uppercase tracking-wide text-slate-600"><th>Number</th><th>Type</th><th>Payer</th><th>Dept</th><th>Mode</th><th className="text-right">Amount</th><th>Cashier</th><th>Status</th><th>Date</th>{canDelete && <th></th>}</tr></thead>
             <tbody>
-              {visibleRows.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-slate-500">No receipts found</td></tr>}
+              {visibleRows.length === 0 && <tr><td colSpan={canDelete ? 10 : 9} className="text-center py-8 text-slate-500">No receipts found</td></tr>}
               {visibleRows.map(r => (
                 <tr key={r.id} data-testid={`rc-row-${r.number}`} className="cursor-pointer" onClick={() => nav(`/receipts/${r.id}`)}>
                   <td className="font-mono text-[12px]">{r.number}</td>
@@ -127,6 +139,7 @@ export default function Receipts() {
                   <td className="text-[12px] text-slate-600">{r.cashier_name}</td>
                   <td><span className={`text-[11px] px-1.5 py-0.5 rounded ${r.status==='cancelled'?'bg-red-100 text-red-800':'bg-emerald-100 text-emerald-800'}`}>{r.status}</span></td>
                   <td className="text-[12px] text-slate-500">{new Date(r.created_at).toLocaleString('en-IN')}</td>
+                  {canDelete && <td className="text-right pr-2"><DustbinButton receipt={r} onDeleted={() => load()} /></td>}
                 </tr>
               ))}
             </tbody>

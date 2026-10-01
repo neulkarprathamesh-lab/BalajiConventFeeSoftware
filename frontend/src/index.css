@@ -52,3 +52,13 @@
 .dense-table thead { background: #F1F5F9; position: sticky; top: 0; }
 .dense-table tbody tr:nth-child(even) { background: #F8FAFC; }
 .dense-table tbody tr:hover { background: #EFF6FF; }
+
+/* A wide, scrollable table (e.g. Live Fee Update) needs its own clearly
+   visible horizontal scrollbar rather than the thin auto-hiding overlay
+   scrollbar Chromium shows by default — otherwise it's easy to miss that
+   more columns exist off to the right. */
+.lfu-scroll-x { overflow-x: auto; max-width: 100%; scrollbar-width: auto; scrollbar-color: #94a3b8 #f1f5f9; }
+.lfu-scroll-x::-webkit-scrollbar { height: 12px; }
+.lfu-scroll-x::-webkit-scrollbar-track { background: #f1f5f9; }
+.lfu-scroll-x::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 6px; border: 2px solid #f1f5f9; }
+.lfu-scroll-x::-webkit-scrollbar-thumb:hover { background: #64748b; }

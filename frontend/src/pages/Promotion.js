@@ -29,7 +29,13 @@ export default function Promotion() {
     else setPreview([]);
   }, [fromClass]);
 
-  const availClasses = classes.filter(c => c.department_id === dept);
+  // Legacy stream names ("Fisheries"/"Electronics") are never a valid NEW
+  // selection - Bi-Focal is the sole canonical student-facing name for that
+  // combined stream. The underlying class/fee_structure documents are left
+  // alone (in case anything historical still points at them) - this only
+  // removes them from what a user can pick going forward.
+  const LEGACY_STREAMS = ['Fisheries', 'Electronics'];
+  const availClasses = classes.filter(c => c.department_id === dept && !LEGACY_STREAMS.includes(c.stream));
   const toClassFS = structures.filter(s => s.class_id === toClass);
 
   const runPromote = async () => {

@@ -820,13 +820,21 @@ async def client_update_report(body: Dict[str, Any]):
     doc["id"] = gen_id()
     doc["received_at"] = now_iso()
     doc["resolved"] = False
-    # journal/error_message are the only free-text fields - hard-cap their
-    # size regardless of what a client sends, defence in depth beyond the
-    # allowlist above.
+    # This is intentionally public (no logged-in session at update-failure
+    # time - see comment above), so every field is capped regardless of what
+    # a client sends, not just the allowlist: short strings hard-truncated,
+    # journal capped to its last 20 real entries, and the whole document
+    # rejected outright if something is still trying to smuggle an oversized
+    # payload through many small fields.
+    for k in ("pc_hostname", "installed_version", "target_version", "stage"):
+        if isinstance(doc.get(k), str):
+            doc[k] = doc[k][:64]
     if isinstance(doc.get("error_message"), str):
         doc["error_message"] = doc["error_message"][:500]
     if isinstance(doc.get("journal"), list):
         doc["journal"] = doc["journal"][-20:]
+    if len(_json.dumps(doc, default=str)) > 8000:
+        raise HTTPException(400, "Report payload too large")
     await db.client_update_reports.insert_one(doc)
     return {"ok": True}
 

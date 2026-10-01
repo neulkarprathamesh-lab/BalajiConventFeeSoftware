@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
-import { Printer } from 'lucide-react';
+import { toast } from 'sonner';
+import { Printer, FileText, FileSpreadsheet, FileDown, ScrollText } from 'lucide-react';
 
 export default function Concessions() {
   const today = new Date().toISOString().slice(0,10);
@@ -12,20 +13,53 @@ export default function Concessions() {
   const [dept, setDept] = useState('');
   const [data, setData] = useState(null);
 
+  const params = () => {
+    const p = { date_from: from, date_to: to };
+    if (dept) p.department_id = dept;
+    return p;
+  };
   const run = () => {
-    const p = new URLSearchParams({ date_from: from, date_to: to });
-    if (dept) p.set('department_id', dept);
-    api.get(`/reports/concessions?${p.toString()}`).then(r => setData(r.data));
+    api.get('/reports/concessions', { params: { ...params(), format: 'json' } }).then(r => setData(r.data));
   };
   useEffect(() => { api.get('/departments').then(r => setDepts(r.data)); run(); }, []); // eslint-disable-line
+
+  const exportFile = async (format) => {
+    try {
+      const { data } = await api.get('/reports/concessions', { params: { ...params(), format }, responseType: 'blob' });
+      const mime = { csv: 'text/csv', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pdf: 'application/pdf' }[format];
+      const url = URL.createObjectURL(new Blob([data], { type: mime }));
+      if (format === 'pdf') { window.open(url, '_blank'); return; }
+      const a = document.createElement('a');
+      a.href = url; a.download = `Concession_Ledger_${from}_to_${to}.${format}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) { toast.error('Export failed'); }
+  };
+
+  const printLetter = async (adjId, admissionNo) => {
+    const win = window.open('', '_blank');
+    try {
+      const { data } = await api.get(`/adjustments/${adjId}/letter`, { responseType: 'blob' });
+      const blobUrl = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));
+      if (win) win.location.href = blobUrl;
+    } catch (e) {
+      if (win) win.close();
+      toast.error(e?.response?.data?.detail || 'Failed to generate letter');
+    }
+  };
 
   return (
     <>
       <PageHeader title="Concession Ledger" subtitle="Approved fee adjustments — monthly management report"
         actions={
-          <button onClick={()=>window.print()} className="h-9 px-3 bg-slate-900 text-white text-sm rounded flex items-center gap-1.5 hover:bg-slate-800 no-print">
-            <Printer className="w-4 h-4" /> Print
-          </button>
+          <div className="flex gap-2 no-print">
+            <button onClick={() => exportFile('csv')} className="h-9 px-3 border border-slate-300 rounded text-sm hover:bg-slate-50 flex items-center gap-1.5"><FileText className="w-4 h-4" /> CSV</button>
+            <button onClick={() => exportFile('xlsx')} className="h-9 px-3 border border-slate-300 rounded text-sm hover:bg-slate-50 flex items-center gap-1.5"><FileSpreadsheet className="w-4 h-4" /> Excel</button>
+            <button onClick={() => exportFile('pdf')} className="h-9 px-3 border border-slate-300 rounded text-sm hover:bg-slate-50 flex items-center gap-1.5"><FileDown className="w-4 h-4" /> Export PDF</button>
+            <button onClick={()=>window.print()} className="h-9 px-3 bg-slate-900 text-white text-sm rounded flex items-center gap-1.5 hover:bg-slate-800">
+              <Printer className="w-4 h-4" /> Print
+            </button>
+          </div>
         }
       />
       <div className="p-6 space-y-4">
@@ -81,9 +115,9 @@ export default function Concessions() {
               </div>
             </div>
             <table className="w-full dense-table" data-testid="cn-table">
-              <thead><tr className="text-left text-[11px] uppercase tracking-wide text-slate-600"><th>#</th><th>Student</th><th>Adm No</th><th>Type</th><th>Reason</th><th className="text-right">Amount</th><th>Approved By</th><th>Date</th></tr></thead>
+              <thead><tr className="text-left text-[11px] uppercase tracking-wide text-slate-600"><th>#</th><th>Student</th><th>Adm No</th><th>Type</th><th>Reason</th><th className="text-right">Amount</th><th>Approved By</th><th>Date</th><th className="no-print"></th></tr></thead>
               <tbody>
-                {data.rows.length === 0 && <tr><td colSpan="8" className="text-center py-6 text-slate-500">No approved concessions in this period</td></tr>}
+                {data.rows.length === 0 && <tr><td colSpan="9" className="text-center py-6 text-slate-500">No approved concessions in this period</td></tr>}
                 {data.rows.map((a, i) => (
                   <tr key={a.id}>
                     <td>{i+1}</td>
@@ -94,6 +128,9 @@ export default function Concessions() {
                     <td className="text-right tabular font-medium">{inr(a.amount)}</td>
                     <td className="text-[12px]">{a.approved_by_name}</td>
                     <td className="text-[12px] text-slate-500">{a.approved_at ? new Date(a.approved_at).toLocaleDateString('en-IN') : '-'}</td>
+                    <td className="no-print text-right">
+                      <button onClick={() => printLetter(a.id, a.student?.admission_no)} title="Print Concession Letter" className="text-slate-400 hover:text-blue-700"><ScrollText className="w-4 h-4" /></button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

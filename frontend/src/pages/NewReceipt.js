@@ -3,15 +3,41 @@ import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import api from '@/lib/api';
 import { inr } from '@/components/Layout';
 import { useAuth } from '@/context/AuthContext';
+import { queueOperation, searchCachedStudents, getCachedStudentById, getCachedMeta, getCachedSyncedAt } from '@/lib/syncEngine';
+
+/**
+ * Offline-safe receipt creation. The ONLINE path is completely unchanged:
+ * same request, same response, same error handling as before this existed.
+ * The ONLY new behavior is on a genuine NETWORK failure (server unreachable -
+ * error.response is undefined, as opposed to a real 400/403/etc business
+ * rejection from the server, which still surfaces exactly as it always has)
+ * - in that one case, the exact same payload is queued locally instead of
+ * lost, to be created for real (with a real, centrally-issued receipt
+ * number) the moment connectivity returns. See lib/syncEngine.js and
+ * backend/routers/sync.py for how that queue is synced idempotently.
+ */
+async function postReceiptOrQueue(payload) {
+  try {
+    const { data } = await api.post('/receipts', payload);
+    return { data, queued: false };
+  } catch (e) {
+    if (!e.response) {
+      const op = await queueOperation('create_receipt', payload);
+      return { data: null, queued: true, localId: op.local_id };
+    }
+    throw e;
+  }
+}
 import {
   Search, GraduationCap, Phone, IdCard, CheckCircle2, Info, Printer,
-  FileText, Banknote, Smartphone, CreditCard, Sparkles, Settings2, Wallet, ArrowUpDown, Users, Zap
+  FileText, Banknote, Smartphone, CreditCard, Sparkles, Settings2, Wallet, ArrowUpDown, Users, Zap, WifiOff
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const TABS = [
   { v: 'school',    l: 'Regular Fee',   sub: 'Quarterly / term-wise' },
   { v: 'installment', l: 'Installment', sub: 'Approved instalments' },
+  { v: 'bus',       l: 'Bus Fee',       sub: 'Bus pending only' },
   { v: 'misc',      l: 'Other Charges', sub: 'Custom line items' },
 ];
 
@@ -31,6 +57,26 @@ const priorityIndex = (name = '') => {
 // Build "lines" for a single student from their ledger
 const linesFromLedger = (l, forTab, studentId, studentName) => {
   if (!l) return [];
+  // Prefer the backend-computed fee_items (Option A) — single source of truth
+  // that already merges any per-student installment overrides on top of the
+  // shared fee_structure, with paid/outstanding derived live from real
+  // receipts. Falls back to the old client-side computation only if an older
+  // backend build hasn't deployed this field yet, so nothing breaks mid-rollout.
+  if (Array.isArray(l.fee_items)) {
+    const rows = l.fee_items.map((it, i) => ({
+      key: `${studentId}::fh-${i}`,
+      student_id: studentId,
+      student_name: studentName,
+      label: it.fee_head_name,
+      outstanding: Number(it.outstanding || 0),
+      include: Number(it.outstanding || 0) > 0,
+      amount: Number(it.outstanding || 0),
+      dueDate: it.due_date,
+      status: it.status,
+    })).filter(r => r.outstanding > 0);
+    rows.sort((a, b) => priorityIndex(a.label) - priorityIndex(b.label));
+    return rows;
+  }
   const fs = l.fee_structure;
   if (!fs || !Array.isArray(fs.items) || !fs.items.length) return [];
   const paidByHead = {};
@@ -60,6 +106,38 @@ const linesFromLedger = (l, forTab, studentId, studentName) => {
   return rows;
 };
 
+// Bus Fee lines — sourced ONLY from the student's real bus_charges (the
+// per-month dues tracked independently of school fee_items), one row per
+// unpaid/partial month, oldest first (same FIFO order the backend uses to
+// settle a "bus" receipt). Never mixes in school/tuition/admission/other
+// pending — that is the whole point of this being a separate builder from
+// linesFromLedger(). month_label ("August 2026") comes straight off the
+// bus_charges document, so the description is never invented.
+const busLinesFromLedger = (l, studentId, studentName) => {
+  if (!l) return [];
+  const charges = (l.bus_charges || [])
+    .filter(c => c.status !== 'paid')
+    .slice()
+    .sort((a, b) => String(a.month).localeCompare(String(b.month)));
+  return charges.map(c => {
+    const outstanding = Math.max(0, Number(c.amount || 0) - Number(c.amount_paid || 0));
+    return {
+      key: `${studentId}::bus-${c.id}`,
+      student_id: studentId,
+      student_name: studentName,
+      label: `Bus Fee - ${c.month_label || c.month}`,
+      month: c.month,
+      outstanding,
+      include: outstanding > 0,
+      amount: outstanding,
+    };
+  }).filter(r => r.outstanding > 0);
+};
+
+const buildLinesForTab = (ledgerData, forTab, studentId, studentName) =>
+  forTab === 'bus' ? busLinesFromLedger(ledgerData, studentId, studentName)
+                    : linesFromLedger(ledgerData, forTab, studentId, studentName);
+
 export default function NewReceipt() {
   const [sp] = useSearchParams();
   const nav = useNavigate();
@@ -68,6 +146,7 @@ export default function NewReceipt() {
 
   const [q, setQ] = useState('');
   const [results, setResults] = useState([]);
+  const [busOnly, setBusOnly] = useState(false);
   const [student, setStudent] = useState(null);
   const [ledger, setLedger] = useState(null);
   const [siblings, setSiblings] = useState([]);           // [{student, ledger}]
@@ -85,34 +164,96 @@ export default function NewReceipt() {
   const [receiptTypeId, setReceiptTypeId] = useState('');
   const [rtidTouched, setRtidTouched] = useState(false);
   const [deptsById, setDeptsById] = useState({});
+  // True once any live call has genuinely failed to reach the server (as opposed
+  // to a real 4xx business rejection) — drives the offline banner and disables
+  // the flows (siblings, installments) that need data this page doesn't cache.
+  const [offline, setOffline] = useState(false);
+  const [offlineSyncedAt, setOfflineSyncedAt] = useState(null);
+  const markOffline = async () => { setOffline(true); setOfflineSyncedAt(await getCachedSyncedAt()); };
 
   const debounceRef = useRef(0);
 
   useEffect(() => {
     const sid = sp.get('student');
-    if (sid) api.get(`/students/${sid}`).then(r => selectStudent(r.data));
-    api.get('/receipt-types').then(r => setReceiptTypes((r.data || []).filter(t => t.enabled !== false)));
-    api.get('/departments').then(r => setDeptsById(Object.fromEntries((r.data || []).map(d => [d.id, d]))));
+    if (sid) {
+      api.get(`/students/${sid}`).then(r => selectStudent(r.data)).catch(async (e) => {
+        if (e.response) return;
+        const cached = await getCachedStudentById(sid);
+        if (cached) selectStudent(cached); else toast.error('Student not in offline cache yet — connect once to sync, then retry.');
+      });
+    }
+    api.get('/receipt-types').then(r => setReceiptTypes((r.data || []).filter(t => t.enabled !== false))).catch(async (e) => {
+      if (e.response) return;
+      const meta = await getCachedMeta();
+      setReceiptTypes(meta.receipt_types || []);
+      markOffline();
+    });
+    api.get('/departments').then(r => setDeptsById(Object.fromEntries((r.data || []).map(d => [d.id, d])))).catch(async (e) => {
+      if (e.response) return;
+      const meta = await getCachedMeta();
+      setDeptsById(Object.fromEntries((meta.departments || []).map(d => [d.id, d])));
+      markOffline();
+    });
   }, []);
 
-  // Suggest the matching approved receipt template (EP/MP/SEC/JC/…) once we know
-  // the student's department, but never override a cashier's own explicit choice.
+  // Suggest the matching approved receipt template based on the student's
+  // ACTUAL class/medium/stream/bus status (not just department) — the same
+  // eligible_receipt_codes_for_class rule the backend enforces at receipt
+  // creation, fetched fresh per student so this can never drift from it.
+  // Never overrides a cashier's own explicit choice.
+  const [eligibleInfo, setEligibleInfo] = useState(null);
   useEffect(() => {
-    if (!student || rtidTouched || receiptTypes.length === 0 || Object.keys(deptsById).length === 0) return;
-    const code = deptsById[student.department_id]?.code;
-    const match = receiptTypes.find(t => (t.applicable_dept_codes || []).length === 1 && t.applicable_dept_codes[0] === code)
-      || receiptTypes.find(t => (t.applicable_dept_codes || []).includes(code));
-    if (match) setReceiptTypeId(match.id);
-  }, [student, receiptTypes, deptsById]); // eslint-disable-line
+    setEligibleInfo(null);
+    if (!student) return;
+    let cancelled = false;
+    api.get(`/students/${student.id}/eligible-receipt-types`).then(({ data }) => {
+      if (cancelled) return;
+      setEligibleInfo(data);
+      if (!rtidTouched && data.primary) setReceiptTypeId(data.primary);
+    }).catch((e) => {
+      if (cancelled || e.response) return;
+      // Offline — the student record from the cached snapshot already carries
+      // the same eligibility computed at last sync (see backend sync.py pull).
+      const cached = student.eligible_receipt_types;
+      if (cached) {
+        setEligibleInfo(cached);
+        if (!rtidTouched && cached.primary) setReceiptTypeId(cached.primary);
+      }
+      markOffline();
+    });
+    return () => { cancelled = true; };
+  }, [student]); // eslint-disable-line
 
   useEffect(() => {
     if (!q || q.length < 2) { setResults([]); return; }
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
-      try { const { data } = await api.get(`/students?q=${encodeURIComponent(q)}&limit=8`); setResults(data); }
-      catch { setResults([]); }
+      try {
+        const busParam = busOnly ? '&bus_required=true' : '';
+        const { data } = await api.get(`/students?q=${encodeURIComponent(q)}&limit=8${busParam}`);
+        setResults(data);
+      }
+      catch (e) {
+        if (e.response) { setResults([]); return; }
+        const cached = await searchCachedStudents(q, { busOnly, limit: 8 });
+        setResults(cached);
+        markOffline();
+      }
     }, 220);
-  }, [q]);
+  }, [q, busOnly]);
+
+  const applyPrimaryLines = (ledgerData, forTab, sid, sname) => {
+    const primaryLines = buildLinesForTab(ledgerData, forTab, sid, sname);
+    setLines(primaryLines);
+    if ((forTab === 'school' || forTab === 'bus') && primaryLines.length) {
+      const first = primaryLines[0];
+      const suggested = String(Math.round(Number(first.outstanding || 0)));
+      setAmountPaying(suggested);
+      setTimeout(() => distribute(suggested, primaryLines), 0);
+    } else {
+      setAmountPaying('');
+    }
+  };
 
   const selectStudent = async (s) => {
     setStudent(s); setResults([]); setQ(''); setIncludeSiblings(false); setSiblings([]);
@@ -122,18 +263,9 @@ export default function NewReceipt() {
         api.get(`/students/${s.id}/ledger`),
         api.get(`/students/${s.id}/siblings`).catch(() => ({ data: { siblings: [] } })),
       ]);
+      setOffline(false);
       setLedger(ledResp.data);
-      const primaryLines = linesFromLedger(ledResp.data, tab, s.id, s.name);
-      setLines(primaryLines);
-      // Auto-suggest: pre-fill amountPaying with the FIRST (highest-priority) pending head's outstanding
-      if (tab === 'school' && primaryLines.length) {
-        const first = primaryLines[0];
-        const suggested = String(Math.round(Number(first.outstanding || 0)));
-        setAmountPaying(suggested);
-        setTimeout(() => distribute(suggested, primaryLines), 0);
-      } else {
-        setAmountPaying('');
-      }
+      applyPrimaryLines(ledResp.data, tab, s.id, s.name);
       // Load siblings' ledgers in the background
       const sibs = sibResp.data?.siblings || [];
       if (sibs.length) {
@@ -148,7 +280,27 @@ export default function NewReceipt() {
         }))).filter(i => !i.paid);
         setInstallments(pending);
       } catch { setInstallments([]); }
-    } catch (e) { toast.error('Could not load student ledger'); }
+    } catch (e) {
+      if (e.response) { toast.error('Could not load student ledger'); return; }
+      // Server unreachable — rebuild the fee position from the last-synced
+      // snapshot (see backend sync.py pull: fee_items/bus_charges/totals are
+      // computed there with the exact same shared logic the live ledger uses).
+      // No siblings or approved-extension data is cached, so those two flows
+      // are simply unavailable offline rather than guessed at.
+      const cached = s.fee_items ? s : await getCachedStudentById(s.id);
+      if (!cached) { toast.error('This student is not in the offline cache yet — sync once while online, then retry.'); return; }
+      await markOffline();
+      const offlineLedger = {
+        student: cached, fee_structure: null, receipts: [], adjustments: [],
+        fee_items: cached.fee_items || [], bus_charges: cached.bus_charges || [],
+        bus_outstanding: cached.bus_outstanding || 0,
+        total_paid: cached.total_paid || 0, school_outstanding: cached.school_outstanding || 0,
+        outstanding: (cached.school_outstanding || 0) + (cached.bus_outstanding || 0),
+      };
+      setLedger(offlineLedger);
+      applyPrimaryLines(offlineLedger, tab, s.id, s.name);
+      setInstallments([]);
+    }
     finally { setBusy(false); }
   };
 
@@ -160,10 +312,10 @@ export default function NewReceipt() {
       return;
     }
     if (forTab === 'installment') { setLines([]); return; }
-    let all = linesFromLedger(ledger, forTab, student.id, student.name);
+    let all = buildLinesForTab(ledger, forTab, student.id, student.name);
     if (withSiblings) {
       for (const s of siblings) {
-        all = all.concat(linesFromLedger(s.ledger, forTab, s.student.id, s.student.name));
+        all = all.concat(buildLinesForTab(s.ledger, forTab, s.student.id, s.student.name));
       }
       // sort by priority across all students
       all.sort((a, b) => priorityIndex(a.label) - priorityIndex(b.label));
@@ -171,8 +323,22 @@ export default function NewReceipt() {
     setLines(all);
   };
 
-  useEffect(() => { if (student && ledger) { rebuildLines(tab, includeSiblings); if (tab !== 'school') setAmountPaying(''); } }, [tab]);
+  useEffect(() => { if (student && ledger) { rebuildLines(tab, includeSiblings); if (tab !== 'school' && tab !== 'bus') setAmountPaying(''); } }, [tab]);
   useEffect(() => { if (student && ledger) { rebuildLines(tab, includeSiblings); if (amountPaying) setTimeout(() => distribute(amountPaying), 30); } }, [includeSiblings, siblings.length]);
+
+  // Keep the "Bus Fee" tab and a BUS-coded receipt format in sync, in both
+  // directions — this is the fix for a BUS-templated receipt silently being
+  // built from Regular Fee (school) lines instead of the student's actual
+  // bus pending. Guarded so it settles instead of looping.
+  useEffect(() => {
+    const code = receiptTypes.find(t => t.id === receiptTypeId)?.code;
+    if (code === 'BUS' && tab !== 'bus' && tab !== 'misc' && tab !== 'installment') setTab('bus');
+  }, [receiptTypeId, receiptTypes]); // eslint-disable-line
+  useEffect(() => {
+    if (tab !== 'bus') return;
+    const busType = receiptTypes.find(t => t.code === 'BUS');
+    if (busType && receiptTypeId !== busType.id) { setRtidTouched(true); setReceiptTypeId(busType.id); }
+  }, [tab, receiptTypes]); // eslint-disable-line
 
   const totalPending = useMemo(
     () => lines.reduce((s, l) => s + Number(l.outstanding || 0), 0)
@@ -232,13 +398,18 @@ export default function NewReceipt() {
       if (!payloadLines.length) return toast.error('Select at least one instalment');
       setBusy(true);
       try {
-        const { data } = await api.post('/receipts', {
+        const { data, queued } = await postReceiptOrQueue({
           receipt_type: 'school', department_id: student.department_id, receipt_type_id: receiptTypeId || null, student_id: student.id,
           payer_name: student.name, payment_mode: mode, payment_reference: ref || null, lines: payloadLines, remarks: remarks || null,
           metadata: { class_name: student.class_name, guardian_name: student.guardian_name, guardian_mobile: student.guardian_mobile },
         });
-        toast.success(`Receipt ${data.number} created`);
-        if (thenPrint) nav(`/receipts/${data.id}`); else nav('/receipts');
+        if (queued) {
+          toast.success('Server unreachable — payment queued offline. A real receipt will be created automatically once connection returns.');
+          nav('/receipts');
+        } else {
+          toast.success(`Receipt ${data.number} created`);
+          if (thenPrint) nav(`/receipts/${data.id}`); else nav('/receipts');
+        }
       } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
       finally { setBusy(false); }
       return;
@@ -261,20 +432,59 @@ export default function NewReceipt() {
     for (const s of siblings) sidToDept[s.student.id] = s.student.department_id;
 
     setBusy(true);
-    const receiptType = tab === 'misc' ? 'misc' : 'school';
+    // The template picker (receiptTypeId) selects visual presentation, but the
+    // actual receipt_type field is what ReceiptEngine's renderBody()/boxLabelFor()
+    // switch on to pick BusReceiptBody vs FeeReceiptBody etc. — these were two
+    // disconnected concepts: selecting "BUS" here always produced a receipt with
+    // receipt_type:'school' regardless, so BusReceiptBody could never actually
+    // render. Fixed by deriving receipt_type from the selected template's code.
+    const selectedCode = receiptTypes.find(t => t.id === receiptTypeId)?.code;
+    const receiptType = tab === 'misc' ? 'misc' : (tab === 'bus' || selectedCode === 'BUS' ? 'bus' : 'school');
+
+    // Bus Fee period, per student — derived ONLY from the real bus_charges
+    // months actually being paid (the `month` carried on each bus line),
+    // never typed by the cashier. Matches exactly what the backend's FIFO
+    // bus settlement (POST /receipts) will apply the payment against.
+    const busPeriodByStudent = {};
+    if (tab === 'bus') {
+      for (const l of lines) {
+        if (!l.include || Number(l.amount) <= 0 || !l.month) continue;
+        const sid = l.student_id || student.id;
+        (busPeriodByStudent[sid] = busPeriodByStudent[sid] || []).push(l.month);
+      }
+      for (const sid of Object.keys(busPeriodByStudent)) busPeriodByStudent[sid].sort();
+    }
+
     const createdReceipts = [];
+    let queuedCount = 0;
     try {
       for (const g of groups) {
         const dept_id = sidToDept[g.student_id];
-        const { data } = await api.post('/receipts', {
+        const { data, queued } = await postReceiptOrQueue({
           receipt_type: receiptType, department_id: dept_id, receipt_type_id: g.student_id === student.id ? (receiptTypeId || null) : null, student_id: g.student_id,
           payer_name: g.student_name, payment_mode: mode, payment_reference: ref || null,
           lines: g.lines, remarks: remarks || null,
-          metadata: { class_name: student.class_name, guardian_name: student.guardian_name, guardian_mobile: student.guardian_mobile, sibling_group_size: groups.length > 1 ? groups.length : undefined },
+          metadata: {
+            class_name: student.class_name, guardian_name: student.guardian_name, guardian_mobile: student.guardian_mobile,
+            sibling_group_size: groups.length > 1 ? groups.length : undefined,
+            ...(receiptType === 'bus' && busPeriodByStudent[g.student_id]?.length
+              ? {
+                  period_from_month: busPeriodByStudent[g.student_id][0],
+                  period_to_month: busPeriodByStudent[g.student_id][busPeriodByStudent[g.student_id].length - 1],
+                }
+              : {}),
+          },
         });
-        createdReceipts.push(data);
+        if (queued) queuedCount += 1; else createdReceipts.push(data);
       }
-      if (createdReceipts.length === 1) {
+      if (queuedCount > 0) {
+        toast.success(
+          createdReceipts.length
+            ? `${createdReceipts.length} receipt(s) created, ${queuedCount} queued offline — will sync automatically when connection returns.`
+            : `Server unreachable — ${queuedCount} payment(s) queued offline. Real receipts will be created automatically once connection returns.`
+        );
+        nav('/receipts');
+      } else if (createdReceipts.length === 1) {
         toast.success(`Receipt ${createdReceipts[0].number} created`);
         if (thenPrint) nav(`/receipts/${createdReceipts[0].id}`); else nav('/receipts');
       } else {
@@ -318,27 +528,50 @@ export default function NewReceipt() {
         </div>
       </div>
 
+      {offline && (
+        <div data-testid="nr-offline-banner" className="bg-amber-50 border-b border-amber-200 px-6 py-2 text-[12px] text-amber-900 flex items-center gap-2 no-print">
+          <WifiOff className="w-4 h-4 flex-shrink-0 text-amber-700" />
+          <span>
+            <strong>Offline mode</strong> — server unreachable. Showing student data and balances as of last sync
+            {offlineSyncedAt ? ` (${new Date(offlineSyncedAt).toLocaleString('en-IN')})` : ''}.
+            Sibling payments and Installment plans need a live connection; receipts you create now are queued and will sync automatically once connection returns.
+          </span>
+        </div>
+      )}
       <div className="bg-white border-b border-slate-200 px-6 pt-3 no-print">
         <div className="flex items-end gap-2">
           <div className="text-[11px] uppercase tracking-widest text-slate-500 mr-3 mb-2">Receipt Type</div>
-          {TABS.map(t => (
-            <button key={t.v} data-testid={`nr-tab-${t.v}`} onClick={() => setTab(t.v)}
-              className={`px-4 pt-2 pb-2.5 -mb-px border-b-2 transition-colors ${tab===t.v ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>
-              <div className="text-[13px] font-semibold">{t.l}</div>
-              <div className="text-[10px] text-slate-400">{t.sub}</div>
-            </button>
-          ))}
+          {TABS.map(t => {
+            const disabled = offline && t.v === 'installment';
+            return (
+              <button key={t.v} data-testid={`nr-tab-${t.v}`} disabled={disabled}
+                title={disabled ? 'Unavailable offline — needs a live connection' : undefined}
+                onClick={() => !disabled && setTab(t.v)}
+                className={`px-4 pt-2 pb-2.5 -mb-px border-b-2 transition-colors ${disabled ? 'opacity-40 cursor-not-allowed border-transparent text-slate-400' : tab===t.v ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>
+                <div className="text-[13px] font-semibold">{t.l}</div>
+                <div className="text-[10px] text-slate-400">{t.sub}</div>
+              </button>
+            );
+          })}
         </div>
       </div>
 
       <div className="bg-slate-50 border-b border-slate-200 px-6 py-4 no-print">
         {!student ? (
           <div className="max-w-3xl">
-            <div className="text-[11px] uppercase tracking-widest text-slate-500 mb-1.5">Find Student</div>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[11px] uppercase tracking-widest text-slate-500">Find Student</div>
+              <label className="flex items-center gap-1.5 text-[12px] text-slate-600 cursor-pointer select-none">
+                <input type="checkbox" data-testid="nr-bus-only" checked={busOnly}
+                  onChange={e => setBusOnly(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                Bus students only
+              </label>
+            </div>
             <div className="relative">
               <Search className="w-4 h-4 absolute left-4 top-3.5 text-slate-400" />
               <input data-testid="nr-search" autoFocus value={q} onChange={e=>setQ(e.target.value)}
-                placeholder="Search by admission no., name or mobile…"
+                placeholder={busOnly ? "Search active bus students by admission no., name or mobile…" : "Search by admission no., name or mobile…"}
                 className="w-full h-11 pl-11 pr-4 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-600 focus:border-blue-600 focus:outline-none bg-white shadow-sm" />
               {results.length > 0 && (
                 <div className="absolute z-20 mt-1 w-full bg-white border border-slate-200 rounded-lg shadow-lg max-h-72 overflow-y-auto">
@@ -365,9 +598,12 @@ export default function NewReceipt() {
                 </div>
                 <div>
                   <div className="font-heading text-lg font-semibold text-slate-900 leading-tight" data-testid="nr-student-name">{student.name}</div>
-                  <div className="flex items-center gap-4 text-[12px] text-slate-600 mt-1">
+                  <div className="flex items-center gap-4 text-[12px] text-slate-600 mt-1 flex-wrap">
                     <span className="inline-flex items-center gap-1"><IdCard className="w-3.5 h-3.5" /> <span className="font-mono">{student.admission_no}</span></span>
-                    <span className="inline-flex items-center gap-1"><GraduationCap className="w-3.5 h-3.5" /> {student.class_name || ledger?.student?.class_name || '—'}</span>
+                    <span className="inline-flex items-center gap-1"><GraduationCap className="w-3.5 h-3.5" /> {student.class_name || ledger?.student?.class_name || '—'}{student.section ? ' / ' + student.section : ''}</span>
+                    {student.medium && <span className="inline-flex items-center gap-1">{student.medium}{student.stream ? ' · ' + student.stream : ''}</span>}
+                    {student.academic_year && <span className="inline-flex items-center gap-1">AY {student.academic_year}</span>}
+                    {student.bus_required && <span className="inline-flex items-center gap-1 text-blue-700">🚌 {student.bus_main_area ? `${student.bus_main_area} (${student.bus_stop_name || '—'})` : 'Bus'}</span>}
                     <span className="inline-flex items-center gap-1"><Phone className="w-3.5 h-3.5" /> <span className="font-mono">{student.guardian_mobile ? student.guardian_mobile.replace(/^(\d{2})(\d+)(\d{2})$/, '$1******$3') : '—'}</span></span>
                   </div>
                 </div>
@@ -395,7 +631,7 @@ export default function NewReceipt() {
         <div className="lg:col-span-8 bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-heading font-semibold text-lg">Payment Details</h3>
-            {student && tab === 'school' && (
+            {student && (tab === 'school' || tab === 'bus') && (
               <span className="inline-flex items-center gap-1.5 text-[12px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2.5 py-0.5">
                 <CheckCircle2 className="w-3.5 h-3.5" /> Allocated automatically
               </span>
@@ -417,14 +653,14 @@ export default function NewReceipt() {
             </div>
           </div>
 
-          {tab === 'school' && (
+          {(tab === 'school' || tab === 'bus') && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3 bg-blue-50/60 border border-blue-200 rounded-lg p-3">
               <div className="md:col-span-2">
                 <label className="text-[10px] uppercase tracking-widest text-blue-800 flex items-center gap-1.5 mb-1"><Wallet className="w-3.5 h-3.5" /> Amount Paying (auto-distributes ↓)</label>
                 <input data-testid="nr-amount-paying" type="number" min="0" step="1" value={amountPaying}
                   onChange={e=>onAmountPayingChange(e.target.value)} placeholder="e.g. 5000"
                   className="w-full h-11 px-3 border-2 border-blue-300 rounded-lg font-mono text-lg font-semibold text-blue-900 bg-white focus:ring-2 focus:ring-blue-600 focus:border-blue-600 focus:outline-none" />
-                <div className="text-[11px] text-blue-800 mt-1 flex items-center gap-1"><ArrowUpDown className="w-3 h-3" /> Order: {PRIORITY.map(p=>p[0].toUpperCase()+p.slice(1)).join(' → ')} → others</div>
+                <div className="text-[11px] text-blue-800 mt-1 flex items-center gap-1"><ArrowUpDown className="w-3 h-3" /> {tab === 'bus' ? 'Order: oldest pending month first' : `Order: ${PRIORITY.map(p=>p[0].toUpperCase()+p.slice(1)).join(' → ')} → others`}</div>
               </div>
               <div className="flex flex-col justify-end gap-2">
                 <button data-testid="nr-next-quarter" onClick={suggestNextQuarter} className="h-9 px-3 border-2 border-blue-300 text-blue-800 hover:bg-blue-100 rounded-lg text-[12px] font-semibold flex items-center justify-center gap-1.5"><Zap className="w-3.5 h-3.5" /> Next Quarter</button>
@@ -462,13 +698,14 @@ export default function NewReceipt() {
                   <th className="w-12 py-2">Include</th>
                   <th>Fee Component</th>
                   {includeSiblings && <th>Student</th>}
-                  {tab === 'school' && <th className="text-right">Outstanding (₹)</th>}
+                  {(tab === 'school' || tab === 'bus') && <th className="text-right">Outstanding (₹)</th>}
                   <th className="text-right">Amount (₹)</th>
                   {tab === 'misc' && <th className="w-10"></th>}
                 </tr>
               </thead>
               <tbody>
                 {lines.length === 0 && tab === 'school' && <tr><td colSpan={includeSiblings ? 5 : 4} className="py-6 text-center text-slate-500 text-[13px]">No pending fee heads found. This student may be fully paid, or has no fee structure assigned.</td></tr>}
+                {lines.length === 0 && tab === 'bus' && <tr><td colSpan={includeSiblings ? 5 : 4} className="py-6 text-center text-slate-500 text-[13px]">No bus fee pending for this student. Either fully paid, not on a bus route, or charges haven't been generated for this month yet.</td></tr>}
                 {lines.map((l, i) => (
                   <tr key={l.key} className="border-b border-slate-100">
                     <td className="py-2"><input type="checkbox" data-testid={`nr-fh-inc-${i}`} checked={!!l.include} onChange={()=>toggleInclude(l.key)} /></td>
@@ -480,7 +717,7 @@ export default function NewReceipt() {
                       )}
                     </td>
                     {includeSiblings && <td className="py-2"><span className={`text-[11px] px-2 py-0.5 rounded-full ${l.student_id===student.id ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'}`}>{l.student_name}</span></td>}
-                    {tab === 'school' && <td className="py-2 text-right font-mono text-slate-600">{Number(l.outstanding).toFixed(2)}</td>}
+                    {(tab === 'school' || tab === 'bus') && <td className="py-2 text-right font-mono text-slate-600">{Number(l.outstanding).toFixed(2)}</td>}
                     <td className="py-2 text-right">
                       <input data-testid={`nr-fh-amt-${i}`} type="number" min="0" step="1" value={l.amount === 0 && !l.include ? '' : l.amount} onChange={e=>setLineAmount(l.key, e.target.value)}
                         className="h-8 w-28 px-2 border border-slate-300 rounded text-right font-mono text-sm bg-white" disabled={!l.include} />
@@ -492,7 +729,7 @@ export default function NewReceipt() {
                   <tr><td colSpan={includeSiblings ? 5 : 4} className="py-2"><button onClick={addCustomLine} className="text-xs text-blue-700 hover:underline">+ Add another line</button></td></tr>
                 )}
                 <tr className="bg-slate-50 font-semibold">
-                  <td colSpan={(tab === 'school' ? 3 : 2) + (includeSiblings ? 1 : 0)} className="py-2 text-right">Total Allocated</td>
+                  <td colSpan={((tab === 'school' || tab === 'bus') ? 3 : 2) + (includeSiblings ? 1 : 0)} className="py-2 text-right">Total Allocated</td>
                   <td className="py-2 text-right font-mono text-lg text-emerald-700" data-testid="nr-total-alloc-row">{inr(totalAllocated)}</td>
                   {tab === 'misc' && <td></td>}
                 </tr>
@@ -508,11 +745,31 @@ export default function NewReceipt() {
             className="w-full h-10 px-3 border border-slate-300 rounded text-sm bg-white mb-4">
             <option value="">— Select approved receipt type —</option>
             {receiptTypes.map(t => {
-              const code = deptsById[student?.department_id]?.code;
-              const compatible = !t.applicable_dept_codes || !code || t.applicable_dept_codes.includes(code);
+              // Once we have a real eligibility answer for this student (class/medium/
+              // stream/bus-aware, from the backend), use it directly — it's authoritative
+              // and exactly what create_receipt will also check. Falls back to the coarser
+              // department-only check only while that fetch is still in flight.
+              let compatible;
+              if (eligibleInfo) {
+                compatible = eligibleInfo.eligible.some(e => e.id === t.id);
+              } else {
+                const code = deptsById[student?.department_id]?.code;
+                compatible = !t.applicable_dept_codes || !code || t.applicable_dept_codes.includes(code);
+              }
               return <option key={t.id} value={t.id}>{t.code} — {t.name}{compatible ? '' : ' (not for this student)'}</option>;
             })}
           </select>
+
+          {tab === 'bus' && (
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded">
+              <div className="text-[11px] uppercase tracking-widest text-blue-800 font-semibold mb-2">Bus Fee Period (from bus records)</div>
+              <div className="text-[13px] font-medium text-blue-900" data-testid="nr-bus-period">
+                {lines.filter(l => l.include && Number(l.amount) > 0).length
+                  ? lines.filter(l => l.include && Number(l.amount) > 0).map(l => l.label.replace('Bus Fee - ', '')).join(', ')
+                  : 'Select the months being paid on the left'}
+              </div>
+            </div>
+          )}
 
           <h3 className="font-heading font-semibold text-lg mb-3">Payment Mode</h3>
           <div className="grid grid-cols-3 gap-2 mb-4">

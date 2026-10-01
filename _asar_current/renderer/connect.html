@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Balaji FeeHub - Connecting</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="brand">
+      <div class="brand-mark">
+        <div class="mark-inner">B</div>
+      </div>
+      <div class="brand-text">
+        <h1>Balaji FeeHub</h1>
+        <p>Balaji Convent &amp; Junior College &middot; Butibori, Nagpur</p>
+      </div>
+    </header>
+
+    <section id="searching" class="panel">
+      <div class="spinner"></div>
+      <h2>Locating your Main Server</h2>
+      <p id="progress" class="progress-line">Starting up...</p>
+      <p class="hint">This normally takes 10-20 seconds on a school LAN.</p>
+    </section>
+
+    <section id="manual" class="panel hidden">
+      <h2>Main Server not found automatically</h2>
+      <p class="lead">Enter the IP address of the Balaji FeeHub Main Server PC. Ask your administrator if you don't know it.</p>
+      <div class="form-row">
+        <label for="ip-input">Main Server IP</label>
+        <input
+          id="ip-input"
+          type="text"
+          placeholder="192.168.0.10"
+          inputmode="numeric"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <div class="actions">
+        <button id="connect-btn" class="btn-primary">Connect</button>
+        <button id="retry-btn" class="btn-secondary">Search LAN Again</button>
+      </div>
+      <p id="error" class="error hidden"></p>
+      <div class="diag-row">
+        <button id="diag-btn" class="btn-link">Create Diagnostic Report</button>
+        <span id="diag-result" class="diag-result hidden"></span>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <span id="saved-info"></span>
+      <span>Version 1.0.0 &middot; Offline LAN edition</span>
+    </footer>
+  </main>
+
+  <script src="connect.js"></script>
+</body>
+</html>

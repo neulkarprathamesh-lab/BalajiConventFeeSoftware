@@ -43,6 +43,10 @@ export default function ReceiptEngine({
                           //   leaves every existing call site (ReceiptView, ReceiptTypes preview, Lookup) untouched.
   outerPaper = null,     // Option E: physical media key (e.g. 'A5_LANDSCAPE') when it differs from the
                           //   receipt's own artwork paper — see ReceiptFrame. Default null = unchanged behavior.
+  canPrint = true,       // Receipt printing is restricted to Administrator/Cashier - the calling page
+                          // decides based on the logged-in user's role. When false, the Print/PDF/PNG/
+                          // export toolbar is replaced with a read-only notice; the receipt content
+                          // itself still renders (viewing is not restricted, only printing/export).
 }) {
   const nodeRef = useRef(null);
   const [paper, setPaper] = useState(receiptType?.paper_size || DEFAULT_PAPER);
@@ -120,7 +124,12 @@ export default function ReceiptEngine({
             </>
           )}
         </div>
-        {minimalPrint ? (
+        {!canPrint ? (
+          <div className="flex items-center gap-2 text-[12px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+            Printing receipts is restricted to Administrator and Cashier roles.
+            {extraActions}
+          </div>
+        ) : minimalPrint ? (
           <MinimalPrintCancelBar settings={settings} onPrint={onPrint} onCancel={onCancel} />
         ) : (
           <ReceiptToolbar
@@ -146,7 +155,7 @@ export default function ReceiptEngine({
           scale={effectiveScale}
           innerRef={nodeRef}
         >
-          <Watermark enabled={wmEnabled} />
+          <Watermark enabled={wmEnabled} variant={r.receipt_type === 'bus' ? 'bus' : 'logo'} />
 
           <ReceiptHeader
             boxLabel={boxLabel}

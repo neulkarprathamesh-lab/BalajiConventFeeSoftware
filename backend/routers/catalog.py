@@ -30,10 +30,17 @@ async def list_classes(department_id: Optional[str] = None, user = Depends(get_c
 
 @router.post("/classes")
 async def create_class(body: ClassIn, user = Depends(require_roles("administrator","manager"))):
+    from core import canonical_stream
+    data = body.model_dump(exclude_none=True)
+    if data.get("stream"):
+        canon = canonical_stream(data["stream"])
+        if not canon:
+            raise HTTPException(400, f"'{data['stream']}' is not a recognised stream - use Arts, Commerce, Science, or Bi-Focal.")
+        data["stream"] = canon
     cid = gen_id()
-    doc = {"id": cid, **body.model_dump(), "created_at": now_iso()}
+    doc = {"id": cid, **data, "created_at": now_iso()}
     await db.classes.insert_one(doc)
-    await audit(user, "create", "class", cid, body.model_dump())
+    await audit(user, "create", "class", cid, data)
     return {k:v for k,v in doc.items() if k != "_id"}
 
 # ---------- Fee Heads ----------

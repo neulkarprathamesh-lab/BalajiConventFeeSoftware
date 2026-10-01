@@ -83,7 +83,7 @@ export default function Diagnostics() {
     }
     return {
       ok: true, warn: true,
-      message: 'Browser print API available. Click "Test Print Page" below to verify the physical printer.',
+      message: 'Browser print API available.',
     };
   }
   async function probeScanner() {
@@ -157,13 +157,6 @@ export default function Diagnostics() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => window.print()}
-            className="h-9 px-3 border border-slate-300 rounded text-sm hover:bg-slate-50"
-            data-testid="diag-test-print"
-          >
-            Test Print Page
-          </button>
           <button
             onClick={runAll}
             disabled={loading}
@@ -243,7 +236,7 @@ export default function Diagnostics() {
       {/* Support block */}
       <section className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-600 leading-relaxed">
         <div className="font-semibold text-slate-800 mb-1">Sharing this report</div>
-        Take a screenshot of this page (or use <span className="font-mono">Test Print Page</span> to save a PDF) and send it to your school's IT / support contact.
+        Take a screenshot of this page and send it to your school's IT / support contact.
         Every check shows a plain-English message, so you can fix common issues (printer offline, backup folder missing, LAN cable unplugged) without any technical knowledge.
       </section>
     </div>

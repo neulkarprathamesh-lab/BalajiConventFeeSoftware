@@ -1,6 +1,13 @@
 import React from 'react';
 import { V, inrPrint } from '../ReceiptPrimitives';
 
+// 'YYYY-MM' -> 'August 2026'; passes through anything that isn't that shape.
+const monthLabel = (ym) => {
+  if (!ym || !/^\d{4}-\d{2}$/.test(ym)) return ym;
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+};
+
 /**
  * BusReceiptBody — bus fee receipt with route + stop + monthly breakdown.
  */
@@ -16,10 +23,17 @@ export default function BusReceiptBody({ r, compact = false }) {
       <div className="grid grid-cols-2 gap-3 border" style={{ borderColor: 'var(--line)' }}>
         <Field label="Student Name"     value={snapshot.name || r.payer_name} big />
         <Field label="Admission No."    value={snapshot.admission_no} mono />
-        <Field label="Class / Division" value={`${snapshot.class_name || '—'}${snapshot.section ? ' / ' + snapshot.section : ''}`} />
-        <Field label="Bus Stop"         value={snapshot.bus_stop_name ? `${snapshot.bus_main_area ? snapshot.bus_main_area + ' — ' : ''}${snapshot.bus_stop_name}` : (meta.bus_stop_name || '—')} />
-        <Field label="Route"            value={meta.bus_route} />
+        <Field label="Class / Division" value={`${snapshot.class_name || '—'}${snapshot.section ? ' / ' + snapshot.section : ''}${snapshot.medium ? ' · ' + snapshot.medium : ''}`} />
+        <Field label="Village / Area"   value={snapshot.bus_stop_name ? `${snapshot.bus_main_area || ''}${snapshot.bus_main_area ? ' ' : ''}(${snapshot.bus_stop_name})` : (meta.bus_stop_name || '—')} />
+        <Field label="Bus No."          value={snapshot.bus_vehicle_no || meta.bus_vehicle_no} />
         <Field label="Payment Mode"     value={String(r.payment_mode || '').toUpperCase()} />
+        {(meta.period_from_month || meta.period_to_month) && (
+          <Field label="Period" big value={
+            meta.period_from_month === meta.period_to_month || !meta.period_to_month
+              ? monthLabel(meta.period_from_month) || monthLabel(meta.period_to_month)
+              : `${monthLabel(meta.period_from_month) || '—'} to ${monthLabel(meta.period_to_month) || '—'}`
+          } />
+        )}
       </div>
 
       <table className="w-full mt-2 border" style={{ borderColor: 'var(--line)' }}>

@@ -14,7 +14,7 @@ already correct, already tested - picks it up automatically. No parallel ledger 
 from typing import Any, Dict, List, Optional
 from datetime import date
 from fastapi import APIRouter, HTTPException, Depends, Response
-from core import db, audit, gen_id, get_current_user, now_iso, require_roles, next_fee_adjustment_number
+from core import db, audit, gen_id, get_current_user, now_iso, require_roles, next_fee_adjustment_number, get_settings_doc
 
 router = APIRouter(prefix="/api", tags=["fee-adjustments"])
 
@@ -333,6 +333,11 @@ async def fee_adjustment_pdf(aid: str, user = Depends(get_current_user)):
     snap = doc["snapshot"]
     fin = doc.get("financials")
     insts = doc.get("installments", [])
+    settings = await get_settings_doc()
+    school_contact = " &middot; ".join(x for x in [
+        f"Mob: {settings['school_phone']}" if settings.get("school_phone") else "",
+        f"Email: {settings['school_email']}" if settings.get("school_email") else "",
+    ] if x)
 
     def inr(n):
         try: return "Rs. {:,.2f}".format(float(n))
@@ -386,8 +391,9 @@ async def fee_adjustment_pdf(aid: str, user = Depends(get_current_user)):
       table.sig td {{ width:50%; text-align:center; border-top: 1px solid #333; padding-top: 5px; font-weight: bold; font-size: 10.5px; }}
       table.sig .cap {{ font-weight: normal; font-size: 9px; color:#333; }}
     </style></head><body>
-    <h1>BALAJI CONVENT &amp; JUNIOR COLLEGE</h1>
-    <div class="sub">BUTIBORI, DIST. NAGPUR</div>
+    <h1>BALAJI CONVENT</h1>
+    <div class="sub">Teacher's Colony, Butibori, Nagpur-441108</div>
+    {f'<div class="sub">{school_contact}</div>' if school_contact else ''}
     <div style="text-align:center;"><span class="app-no">FEE ADJUSTMENT APPLICATION &nbsp;·&nbsp; {_html.escape(doc['application_no'])}</span></div>
 
     <table class="details">

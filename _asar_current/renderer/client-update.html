@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Balaji FeeHub - Updating</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .update-shell { max-width: 640px; padding: 32px 28px; }
+    .version-row { display: flex; gap: 24px; margin: 18px 0; align-items: center; justify-content: center; }
+    .version-box { flex: 1; background: rgba(226,232,240,0.05); border: 1px solid rgba(226,232,240,0.08); border-radius: 8px; padding: 12px 16px; text-align: center; }
+    .version-box .label { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #94a3b8; margin-bottom: 4px; }
+    .version-box .value { font-size: 20px; font-weight: 600; color: #f8fafc; font-family: 'Consolas', monospace; }
+    .version-box.upgrade .value { color: #34d399; }
+    .arrow { color: #64748b; font-size: 22px; }
+    .progress-shell { background: rgba(226,232,240,0.08); border-radius: 999px; overflow: hidden; height: 10px; margin: 18px 0 8px; }
+    .progress-bar { background: linear-gradient(90deg, #0f766e, #34d399); height: 100%; width: 0%; transition: width 0.25s ease; }
+    .progress-pct { text-align: center; font-family: 'Consolas', monospace; font-size: 13px; color: #cbd5e1; margin-bottom: 4px; }
+    .stage-line { font-size: 14px; color: #e2e8f0; margin: 10px 0 2px; text-align: center; font-weight: 600; }
+    .phase-line { font-size: 12px; color: #94a3b8; margin: 2px 0 0; font-family: 'Consolas', monospace; text-align: center; }
+    .stage-list { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 22px 0 6px; }
+    .stage-chip { font-size: 11px; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(226,232,240,0.15); color: #64748b; }
+    .stage-chip.active { color: #34d399; border-color: rgba(52,211,153,0.4); background: rgba(52,211,153,0.08); }
+    .stage-chip.done { color: #94a3b8; border-color: rgba(148,163,184,0.25); }
+    .stage-chip.failed { color: #fca5a5; border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.08); }
+    .hidden { display: none !important; }
+    .ok-banner { background: rgba(52,211,153,0.12); border: 1px solid rgba(52,211,153,0.3); color: #34d399; padding: 12px 14px; border-radius: 8px; margin: 14px 0; text-align: center; }
+    .err-banner { background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3); color: #fca5a5; padding: 12px 14px; border-radius: 8px; margin: 14px 0; }
+    .hint { font-size: 12px; color: #94a3b8; text-align: center; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <main class="wrap update-shell">
+    <header class="brand">
+      <div class="brand-mark"><div class="mark-inner">B</div></div>
+      <div class="brand-text">
+        <h1>Balaji FeeHub</h1>
+        <p>Updating Client Application</p>
+      </div>
+    </header>
+
+    <section id="progress" class="panel">
+      <div class="version-row">
+        <div class="version-box"><div class="label">Current</div><div class="value" id="installed-version">-</div></div>
+        <div class="arrow">&#8594;</div>
+        <div class="version-box upgrade"><div class="label">New</div><div class="value" id="remote-version">-</div></div>
+      </div>
+
+      <div class="progress-shell"><div class="progress-bar" id="progress-bar"></div></div>
+      <div class="progress-pct" id="progress-pct">0%</div>
+      <div class="stage-line" id="stage-line">Starting...</div>
+      <div class="phase-line" id="phase-line">&nbsp;</div>
+
+      <div class="stage-list" id="stage-list">
+        <span class="stage-chip" data-stage="downloading">Downloading</span>
+        <span class="stage-chip" data-stage="verifying">Verifying</span>
+        <span class="stage-chip" data-stage="signature">Signature</span>
+        <span class="stage-chip" data-stage="backup">Backup</span>
+        <span class="stage-chip" data-stage="installing">Installing</span>
+        <span class="stage-chip" data-stage="restarting">Restarting</span>
+      </div>
+      <div class="hint" id="hint">Please keep Balaji FeeHub open until this finishes. It will restart itself automatically.</div>
+    </section>
+
+    <section id="failure" class="panel hidden">
+      <div class="err-banner" id="error-message">Update failed.</div>
+      <p class="hint">Your existing installation is untouched and safe to keep using.</p>
+      <div class="actions" style="text-align:center; margin-top:14px;">
+        <button class="btn-secondary" id="close-btn" data-testid="cu-close-btn">Close</button>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <span></span>
+      <span id="footer-text">Balaji FeeHub</span>
+    </footer>
+  </main>
+
+  <script src="client-update.js"></script>
+</body>
+</html>

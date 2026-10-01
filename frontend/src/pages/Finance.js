@@ -44,6 +44,7 @@ export default function Finance() {
     try {
       const { data } = await api.post('/receipts', {
         receipt_type: 'debit_voucher',
+        receipt_type_id: dvType?.id || null,
         department_id: department,
         payer_name: payee.trim(),
         purpose: purpose || null,

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
@@ -11,7 +11,9 @@ export default function Adjustments() {
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState('');
   const [cap, setCap] = useState(5000);
-  const [open, setOpen] = useState(!!sp.get('student'));
+  const [open, setOpen] = useState(!!sp.get('student') || sp.get('new') === '1');
+  const [student, setStudent] = useState(null);
+  const [snapshot, setSnapshot] = useState(null);
   const [f, setF] = useState({
     student_id: sp.get('student') || '',
     adjustment_type: 'scholarship',
@@ -21,13 +23,34 @@ export default function Adjustments() {
     reminder_id: sp.get('reminder') || null,
   });
 
+  // A student_id may already be in the URL (e.g. from a reminder link) - load its
+  // display details so the picker below doesn't look empty for a valid preselection.
+  useEffect(() => {
+    if (f.student_id && !student) {
+      api.get(`/students/${f.student_id}/fee-adjustment-snapshot`).then(r => {
+        setStudent({ id: f.student_id, name: r.data.student_name, admission_no: r.data.admission_no });
+        setSnapshot(r.data);
+      }).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
   const load = () => { const p = status ? `?status=${status}` : ''; api.get(`/adjustments${p}`).then(r => setRows(r.data)); };
   useEffect(() => { load(); }, [status]);
   useEffect(() => { api.get('/settings').then(r => setCap(r.data.manager_waiver_cap ?? 5000)).catch(()=>{}); }, []);
 
+  const selectStudent = async (s) => {
+    setStudent(s); setF({ ...f, student_id: s.id });
+    const { data } = await api.get(`/students/${s.id}/fee-adjustment-snapshot`);
+    setSnapshot(data);
+  };
+  const changeStudent = () => { setStudent(null); setSnapshot(null); setF({ ...f, student_id: '' }); };
+  const closeModal = () => { setOpen(false); changeStudent(); };
+
   const submit = async (e) => {
     e.preventDefault();
-    try { await api.post('/adjustments', { ...f, amount: parseFloat(f.amount) }); toast.success('Adjustment submitted'); setOpen(false); load(); }
+    if (!f.student_id) return toast.error('Select a student');
+    try { await api.post('/adjustments', { ...f, amount: parseFloat(f.amount) }); toast.success('Adjustment submitted'); setOpen(false); changeStudent(); load(); }
     catch (ex) { toast.error(ex?.response?.data?.detail || 'Failed'); }
   };
 
@@ -79,14 +102,25 @@ export default function Adjustments() {
           <form onSubmit={submit} className="bg-white rounded shadow-lg w-full max-w-lg">
             <div className="px-5 py-3 border-b border-slate-200 font-heading font-medium">New Fee Adjustment</div>
             <div className="p-5 space-y-3">
-              <F label="Student ID *"><input required data-testid="adj-student" className={inp} value={f.student_id} onChange={e=>setF({...f, student_id:e.target.value})} placeholder="Paste student id from student page URL" /></F>
+              <StudentPicker student={student} onSelect={selectStudent} onChange={changeStudent} />
+              {snapshot && (
+                <div className="bg-slate-50 border border-slate-200 rounded p-3 text-[12px] grid grid-cols-2 gap-x-3 gap-y-1" data-testid="adj-snapshot">
+                  <div><span className="text-slate-500">Admission No.:</span> {snapshot.admission_no}</div>
+                  <div><span className="text-slate-500">Class:</span> {snapshot.class_name}{snapshot.section ? ` / ${snapshot.section}` : ''}</div>
+                  <div><span className="text-slate-500">Medium:</span> {snapshot.medium}{snapshot.stream ? ` · ${snapshot.stream}` : ''}</div>
+                  <div><span className="text-slate-500">Academic Year:</span> {snapshot.academic_year}</div>
+                  <div><span className="text-slate-500">Total Fee:</span> {inr(snapshot.total_fee)}</div>
+                  <div><span className="text-slate-500">Fee Paid Till Now:</span> {inr(snapshot.total_paid)}</div>
+                  <div className="col-span-2"><span className="text-slate-500">Remaining / Pending Fee:</span> <span className="font-bold text-slate-900">{inr(snapshot.current_balance)}</span></div>
+                </div>
+              )}
               <F label="Type *"><select className={inp} value={f.adjustment_type} onChange={e=>setF({...f, adjustment_type:e.target.value})}>{['scholarship','staff_child','management','financial_assistance','special','correction'].map(x=><option key={x}>{x}</option>)}</select></F>
               <F label="Amount (₹) *"><input required type="number" step="0.01" className={inp} value={f.amount} onChange={e=>setF({...f, amount:e.target.value})} /></F>
               <F label="Reason *"><textarea required rows="3" className={inp} value={f.reason} onChange={e=>setF({...f, reason:e.target.value})} /></F>
             </div>
             <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-200 bg-slate-50">
-              <button type="button" onClick={()=>setOpen(false)} className="h-9 px-3 border border-slate-300 rounded text-sm">Cancel</button>
-              <button className="h-9 px-4 bg-blue-600 text-white rounded text-sm">Submit</button>
+              <button type="button" onClick={closeModal} className="h-9 px-3 border border-slate-300 rounded text-sm">Cancel</button>
+              <button disabled={!f.student_id} data-testid="adj-submit" className="h-9 px-4 bg-blue-600 text-white rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed">Submit</button>
             </div>
           </form>
         </div>
@@ -96,3 +130,43 @@ export default function Adjustments() {
 }
 const inp = "w-full h-9 px-3 border border-slate-300 rounded text-sm focus:ring-2 focus:ring-blue-600 focus:border-blue-600 focus:outline-none bg-white";
 const F = ({ label, children }) => <label className="block"><div className="text-[11px] uppercase tracking-wide text-slate-600 mb-1">{label}</div>{children}</label>;
+
+function StudentPicker({ student, onSelect, onChange }) {
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState([]);
+  const debounceRef = useRef(0);
+
+  useEffect(() => {
+    if (!q || q.length < 2) { setResults([]); return; }
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      try { const { data } = await api.get(`/students?q=${encodeURIComponent(q)}&limit=8`); setResults(data); }
+      catch { setResults([]); }
+    }, 220);
+  }, [q]);
+
+  return (
+    <label className="block relative">
+      <div className="text-[11px] uppercase tracking-wide text-slate-600 mb-1">Student Name *</div>
+      {student ? (
+        <div className="flex items-center justify-between h-9 px-3 border border-slate-300 rounded text-sm bg-slate-50">
+          <span>{student.name} <span className="text-slate-400 font-mono text-[12px]">({student.admission_no})</span></span>
+          <button type="button" onClick={onChange} className="text-slate-400 hover:text-slate-700 text-xs">change</button>
+        </div>
+      ) : (
+        <>
+          <input autoFocus data-testid="adj-student-search" value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by student name or admission no…" className={inp} />
+          {results.length > 0 && (
+            <div className="absolute z-10 mt-1 w-full bg-white border border-slate-200 rounded shadow-lg max-h-56 overflow-y-auto">
+              {results.map(r => (
+                <button type="button" key={r.id} onClick={() => { onSelect(r); setQ(''); setResults([]); }} className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 flex justify-between">
+                  <span>{r.name}</span><span className="text-slate-400 font-mono text-[12px]">{r.admission_no}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </label>
+  );
+}

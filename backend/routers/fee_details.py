@@ -13,6 +13,7 @@ collection the per-student ledger panel uses, so there is exactly one source
 of truth for a student's carried-forward balance — never two numbers that
 could drift apart.
 """
+import re
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Depends, Response
 from core import db, audit, gen_id, get_current_user, now_iso, require_roles
@@ -108,7 +109,7 @@ async def record_opening_balance_payment(sid: str, body: Dict[str, Any],
 
 def _billing_group_key(student: dict, class_doc: dict) -> Dict[str, Any]:
     """The REAL billing group for a student — used for bulk-fee file generation.
-    Electronics and Fisheries are their OWN group here (different fee amounts), never merged
+    Bi-Focal and Fisheries are their OWN group here (different fee amounts), never merged
     into Science. Any 'Science' display/teacher-grouping label is a presentation-layer concern
     elsewhere, not this billing grouping."""
     cname = class_doc.get("name", "?")
@@ -124,6 +125,98 @@ def _billing_group_key(student: dict, class_doc: dict) -> Dict[str, Any]:
         display = f"{cname} · {medium} · Section {section or '—'}"
     return {"class_name": cname, "medium": medium, "stream": stream, "section": section,
             "group_key": label, "display": display}
+
+# ---------------- Per-student fee/installment overrides (Option A) ----------------
+# For an individual student + academic year + fee head, admin can define a
+# total amount optionally split into 1-4 installments with due dates. This
+# ONLY changes which line items a student's ledger shows (see
+# students.py::student_ledger's fee_items merge) — payment itself is
+# unchanged: a cashier pays via the existing receipt system exactly as for
+# any other fee head, and paid/outstanding is always derived live from real
+# receipts, never a stored/independently-editable status field.
+from core import validate_installments
+
+@router.get("/students/{sid}/fee-overrides")
+async def list_fee_overrides(sid: str, academic_year: Optional[str] = None, user = Depends(get_current_user)):
+    q: Dict[str, Any] = {"student_id": sid}
+    if academic_year: q["academic_year"] = academic_year
+    return await db.student_fee_overrides.find(q, {"_id": 0}).sort("fee_head_name", 1).to_list(50)
+
+@router.post("/students/{sid}/fee-overrides")
+async def set_fee_override(sid: str, body: Dict[str, Any],
+                            user = Depends(require_roles("administrator", "manager", "accountant"))):
+    """Create or replace ONE student's override for one fee head + academic year.
+    Does not touch fee_structures (the shared class template stays the default
+    for every other student), does not create a receipt, and does not alter
+    any existing receipt/payment. Existing students with no override for a
+    given head simply keep using the shared fee_structure item, unaffected."""
+    fee_head_name = str(body.get("fee_head_name") or "").strip()
+    academic_year = str(body.get("academic_year") or "").strip()
+    total_amount = body.get("total_amount")
+    installments = body.get("installments") or []
+    reason = body.get("reason")
+    if not fee_head_name or not academic_year:
+        raise HTTPException(400, "fee_head_name and academic_year are required")
+    try:
+        total_amount = float(total_amount)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "total_amount must be a number")
+    if total_amount <= 0:
+        raise HTTPException(400, "total_amount must be positive")
+
+    student = await db.students.find_one({"id": sid}, {"_id": 0})
+    if not student:
+        raise HTTPException(404, "Student not found")
+
+    clean_installments = None
+    if installments:
+        try:
+            validate_installments(total_amount, installments)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        clean_installments = [
+            {"installment_no": idx + 1, "amount": float(i["amount"]), "due_date": str(i["due_date"]).strip()}
+            for idx, i in enumerate(installments)
+        ]
+
+    existing = await db.student_fee_overrides.find_one({"student_id": sid, "academic_year": academic_year, "fee_head_name": fee_head_name})
+    now = now_iso()
+    doc = {
+        "student_id": sid, "academic_year": academic_year, "fee_head_name": fee_head_name,
+        "total_amount": total_amount, "installments": clean_installments,
+        "reason": reason, "updated_at": now, "updated_by": user["name"],
+    }
+    if existing:
+        old_total = existing.get("total_amount")
+        await db.student_fee_overrides.update_one({"id": existing["id"]}, {"$set": doc})
+        oid = existing["id"]
+        action = "update"
+    else:
+        oid = gen_id()
+        doc.update({"id": oid, "created_at": now, "created_by": user["name"]})
+        await db.student_fee_overrides.insert_one(doc)
+        old_total = None
+        action = "create"
+
+    await audit(user, action, "student_fee_override", oid, {
+        "student_id": sid, "admission_no": student.get("admission_no"), "academic_year": academic_year,
+        "fee_head_name": fee_head_name, "old_total": old_total, "new_total": total_amount,
+        "installment_count": len(clean_installments) if clean_installments else 0, "reason": reason,
+    })
+    return {k: v for k, v in doc.items() if k != "_id"} | {"id": oid}
+
+@router.delete("/students/{sid}/fee-overrides/{oid}")
+async def delete_fee_override(sid: str, oid: str, user = Depends(require_roles("administrator", "manager"))):
+    """Removing an override reverts that student to the shared fee_structure
+    item for that head — never touches any existing receipt/payment."""
+    existing = await db.student_fee_overrides.find_one({"id": oid, "student_id": sid})
+    if not existing:
+        raise HTTPException(404, "Not found")
+    await db.student_fee_overrides.delete_one({"id": oid})
+    await audit(user, "delete", "student_fee_override", oid, {
+        "student_id": sid, "fee_head_name": existing.get("fee_head_name"), "academic_year": existing.get("academic_year"),
+    })
+    return {"deleted": True}
 
 @router.get("/fee-details/groups")
 async def list_fee_detail_groups(user = Depends(get_current_user)):
@@ -256,6 +349,418 @@ async def download_all_group_templates(academic_year: str = "2026-27",
     return Response(content=buf.getvalue(), media_type="application/zip",
                      headers={"Content-Disposition": f'attachment; filename="Bulk_Fee_Update_{academic_year}_AllClasses.zip"'})
 
+# ==================== LIVE FEE UPDATE ====================
+# Built entirely on the existing student_fee_overrides storage and the
+# shared compute_fee_items() function — "Updated Fee" for a normal fee head
+# is stored as exactly the same override record the installment UI uses
+# (just with no installments split), so there is one storage mechanism for
+# per-student fee changes, not two. Bus Fee is read from its own existing
+# bus_stops/bus_charges data — never mixed into this collection, per the
+# explicit instruction to keep bus fee logic completely separate.
+from core import compute_fee_items, apply_opening_paid
+
+FEE_HEAD_OPTIONS = [
+    "Tuition Fee", "Admission Fee", "Continuation Fee", "Bus Fee",
+    "Tuition Fee - Installment 1", "Tuition Fee - Installment 2",
+    "Tuition Fee - Installment 3", "Tuition Fee - Installment 4",
+    "Late Fee", "Fine", "Practical Fee", "Development Fee",
+    "Previous Year Balance", "Other Fee",
+]
+
+@router.get("/fee-update/fee-head-options")
+async def fee_head_options(user = Depends(get_current_user)):
+    """The fixed list the Phase-3 selector checkboxes are built from."""
+    return FEE_HEAD_OPTIONS
+
+@router.get("/fee-update/students")
+async def fee_update_students(
+    academic_year: str = "2026-27",
+    class_id: Optional[str] = None,
+    section: Optional[str] = None,
+    medium: Optional[str] = None,
+    stream: Optional[str] = None,
+    department_id: Optional[str] = None,
+    fee_heads: str = "",  # comma-separated, matches FEE_HEAD_OPTIONS entries
+    user = Depends(get_current_user),
+):
+    """Filtered/sorted grid for Live Fee Update. Read-only. Current/Paid/
+    Balance per selected fee head come from compute_fee_items() (school
+    heads) or bus_stops/bus_charges (Bus Fee) or student_opening_balances
+    (Previous Year Balance) — always derived from real data, never a
+    separately-maintained stored total."""
+    wanted = [h.strip() for h in fee_heads.split(",") if h.strip()]
+    q: Dict[str, Any] = {"status": "active", "academic_year": academic_year}
+    if class_id: q["class_id"] = class_id
+    if section: q["section"] = section
+    if medium: q["medium"] = medium
+    if stream: q["stream"] = stream
+    if department_id: q["department_id"] = department_id
+    students = await db.students.find(q, {"_id": 0}).to_list(5000)
+    if not students:
+        return []
+
+    classes = {c["id"]: c for c in await db.classes.find({}, {"_id": 0}).to_list(2000)}
+    departments = {d["id"]: d for d in await db.departments.find({}, {"_id": 0}).to_list(50)}
+    fs_by_id = {f["id"]: f for f in await db.fee_structures.find({}, {"_id": 0}).to_list(2000)}
+    stops_by_no = {s["stop_no"]: s for s in await db.bus_stops.find({"academic_year": academic_year}, {"_id": 0}).to_list(500)}
+    sids = [s["id"] for s in students]
+    adjustments_by_sid: Dict[str, List[dict]] = {}
+    for a in await db.adjustments.find({"student_id": {"$in": sids}, "status": "approved"}, {"_id": 0}).to_list(5000):
+        adjustments_by_sid.setdefault(a["student_id"], []).append(a)
+
+    rows = []
+    for s in students:
+        cls = classes.get(s.get("class_id"), {})
+        dept = departments.get(s.get("department_id"), {})
+        fs = fs_by_id.get(s.get("fee_structure_id"))
+        overrides = await db.student_fee_overrides.find({"student_id": s["id"], "academic_year": academic_year}, {"_id": 0}).to_list(20)
+        receipts = await db.receipts.find({"student_id": s["id"], "status": {"$ne": "cancelled"}}, {"_id": 0}).to_list(500)
+        items = compute_fee_items((fs.get("items") if fs else None) or [], overrides, receipts)
+        # Same opening-paid carry-forward as /students/{id}/ledger (see core.py
+        # apply_opening_paid) — a real, pre-go-live payment imported into
+        # fee_details, never a fake receipt — so this grid and Student Profile
+        # never disagree about what a migrated student has already paid.
+        fd = await db.fee_details.find_one({"student_id": s["id"], "academic_year": academic_year}, {"_id": 0})
+        items, opening_paid_unabsorbed = apply_opening_paid(items, float(fd.get("total_paid") or 0) if fd else 0)
+        items_by_name = {it["fee_head_name"].strip().lower(): it for it in items}
+
+        # Overall Total/Paid/Balance - the student's genuine overall school-fee
+        # position (identical formula to /students/{id}/ledger's total_paid/
+        # school_outstanding), completely independent of whichever single fee
+        # head is selected in the dropdown above. Previously the grid showed the
+        # PER-HEAD paid/balance here instead (fh.paid/fh.balance below) - real
+        # fee_structure items are named "Tuition I/II/III" etc, never literally
+        # "Tuition Fee", so selecting the default "Tuition Fee" head always
+        # looked up nothing and showed a false ₹0.00 even for students who had
+        # genuinely paid. Bus receipts/Bus Fee are still excluded here exactly
+        # as before: compute_fee_items() only ever matches a receipt line to a
+        # fee item by name, and bus lines ("Bus Fee - <month>") never match a
+        # school fee_structure item name, so they were never counted anyway.
+        overall_total = float(fs.get("total") or 0) if fs else 0
+        overall_paid = sum(it["paid"] for it in items) + opening_paid_unabsorbed
+        total_refunded = sum(r.get("total", 0) for r in receipts if r.get("receipt_type") == "refund")
+        total_adjusted = sum(a.get("amount", 0) for a in adjustments_by_sid.get(s["id"], []))
+        overall_balance = max(0, round(overall_total - overall_paid - total_adjusted + total_refunded, 2))
+
+        row = {
+            "student_id": s["id"], "admission_no": s.get("admission_no"), "student_name": s.get("name"),
+            "class_id": s.get("class_id"),
+            "class_name": cls.get("name"), "section": s.get("section"), "medium": s.get("medium"),
+            "stream": s.get("stream"), "department_name": dept.get("name"), "mobile": s.get("guardian_mobile"),
+            "overall_total": overall_total, "overall_paid": round(overall_paid, 2), "overall_balance": overall_balance,
+            "fee_heads": {},
+        }
+        for head in wanted:
+            hl = head.strip().lower()
+            if head == "Bus Fee":
+                stop = stops_by_no.get(s.get("bus_stop_no")) if s.get("bus_required") else None
+                bus_charges = await db.bus_charges.find({"student_id": s["id"]}, {"_id": 0}).to_list(500)
+                bus_paid = sum(float(c.get("amount_paid") or 0) for c in bus_charges)
+                bus_total = sum(float(c.get("amount") or 0) for c in bus_charges)
+                row["fee_heads"][head] = {
+                    "current": stop.get("monthly_fee") if stop else None,
+                    "paid": bus_paid, "balance": max(0, round(bus_total - bus_paid, 2)),
+                }
+            elif head == "Previous Year Balance":
+                ob = await db.student_opening_balances.find_one({"student_id": s["id"], "academic_year": academic_year}, {"_id": 0})
+                amt = ob.get("amount", 0) if ob else 0
+                row["fee_heads"][head] = {"current": amt, "paid": 0, "balance": amt}
+            else:
+                it = items_by_name.get(hl)
+                row["fee_heads"][head] = {"current": it["total"], "paid": it["paid"], "balance": it["outstanding"]} if it else {"current": None, "paid": 0, "balance": 0}
+        rows.append(row)
+
+    # Class -> Medium -> Section -> Name -> Admission No.
+    rows.sort(key=lambda r: (r["class_name"] or "", r["medium"] or "", r["section"] or "", r["student_name"] or "", r["admission_no"] or ""))
+    return rows
+
+@router.post("/students/{sid}/fee-update")
+async def update_student_fee(sid: str, body: Dict[str, Any],
+                              user = Depends(get_current_user)):
+    """Sets/replaces a student's 'Updated Fee' for one fee head (no
+    installments — for a split plan, use POST /students/{id}/fee-overrides
+    instead; both write to the same student_fee_overrides collection, so a
+    plain update and an installment plan can never disagree about which is
+    current). Requires a reason. Rejects if the new fee is below what's
+    already been paid, rather than creating an impossible negative balance.
+    Never creates a receipt; never touches any existing receipt.
+
+    Authorization: administrator/manager/accountant always may. A cashier
+    may ONLY if they currently hold an active, non-expired, non-revoked
+    temporary Fee Edit Access grant (see routers/fee_edit_access.py) for
+    this exact student's class/medium and fee scope (school/bus), on the
+    same device_id the grant was approved for - never the Master PIN
+    itself, and never a class/scope outside what was explicitly approved."""
+    fee_head_name = str(body.get("fee_head_name") or "").strip()
+    academic_year = str(body.get("academic_year") or "").strip()
+    new_fee = body.get("new_fee")
+    reason = str(body.get("reason") or "").strip()
+    if not fee_head_name or not academic_year:
+        raise HTTPException(400, "fee_head_name and academic_year are required")
+    if not reason:
+        raise HTTPException(400, "A reason is required for every fee update")
+    try:
+        new_fee = float(new_fee)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "new_fee must be a number")
+    if new_fee <= 0:
+        raise HTTPException(400, "new_fee must be positive")
+
+    student = await db.students.find_one({"id": sid}, {"_id": 0})
+    if not student:
+        raise HTTPException(404, "Student not found")
+
+    temp_grant = None
+    if user["role"] not in ("administrator", "manager", "accountant"):
+        from routers.fee_edit_access import find_active_grant
+        required_scope = "bus" if fee_head_name.strip().lower() == "bus fee" else "school"
+        device_id = str(body.get("device_id") or "").strip()
+        temp_grant = await find_active_grant(user, device_id, student, required_scope)
+        if not temp_grant:
+            raise HTTPException(403, "You do not have temporary Fee Edit Access for this class/scope. Request access from Live Fee Update.")
+
+    fs = await db.fee_structures.find_one({"id": student.get("fee_structure_id")}, {"_id": 0}) if student.get("fee_structure_id") else None
+    existing_override = await db.student_fee_overrides.find_one({"student_id": sid, "academic_year": academic_year, "fee_head_name": fee_head_name})
+    receipts = await db.receipts.find({"student_id": sid, "status": {"$ne": "cancelled"}}, {"_id": 0}).to_list(500)
+
+    # Old fee = current override if present, else the shared fee_structure item's amount
+    old_fee = None
+    if existing_override:
+        old_fee = existing_override.get("total_amount")
+    elif fs:
+        for it in (fs.get("items") or []):
+            if (it.get("fee_head_name") or "").strip().lower() == fee_head_name.lower():
+                old_fee = float(it.get("amount") or 0)
+                break
+
+    total_paid = 0.0
+    for r in receipts:
+        if r.get("receipt_type") in ("refund", "debit_voucher"):
+            continue
+        for line in (r.get("lines") or []):
+            if (line.get("fee_head_name") or "").strip().lower() == fee_head_name.lower():
+                total_paid += float(line.get("amount") or 0)
+
+    if new_fee < total_paid - 0.01:
+        raise HTTPException(400, f"New fee (₹{new_fee:,.2f}) cannot be less than what's already been paid (₹{total_paid:,.2f}). This would create a negative balance.")
+
+    new_balance = round(new_fee - total_paid, 2)
+    now = now_iso()
+    doc = {
+        "student_id": sid, "academic_year": academic_year, "fee_head_name": fee_head_name,
+        "total_amount": new_fee, "installments": None, "reason": reason,
+        "updated_at": now, "updated_by": user["name"],
+    }
+    if existing_override:
+        await db.student_fee_overrides.update_one({"id": existing_override["id"]}, {"$set": doc})
+        oid = existing_override["id"]
+    else:
+        oid = gen_id()
+        doc.update({"id": oid, "created_at": now, "created_by": user["name"]})
+        await db.student_fee_overrides.insert_one(doc)
+
+    class_doc = await db.classes.find_one({"id": student.get("class_id")}, {"_id": 0}) if student.get("class_id") else None
+    await audit(user, "fee_update", "student_fee_override", oid, {
+        "student_id": sid, "student_name": student.get("name"), "admission_no": student.get("admission_no"),
+        "class_name": class_doc.get("name") if class_doc else None,
+        "academic_year": academic_year, "fee_head_name": fee_head_name,
+        "old_fee": old_fee, "new_fee": new_fee, "difference": (new_fee - old_fee) if old_fee is not None else None,
+        "total_paid_at_update": total_paid, "new_balance": new_balance,
+        "updated_by": user["name"], "updated_by_id": user["id"], "at": now, "reason": reason,
+        "via_temporary_access": temp_grant["id"] if temp_grant else None,
+        "temporary_access_approved_by": temp_grant.get("approved_by_name") if temp_grant else None,
+    })
+    return {"ok": True, "old_fee": old_fee, "new_fee": new_fee, "total_paid": total_paid, "new_balance": new_balance}
+
+@router.get("/fee-update/export.csv")
+async def fee_update_export_csv(
+    academic_year: str = "2026-27", class_id: Optional[str] = None, section: Optional[str] = None,
+    medium: Optional[str] = None, stream: Optional[str] = None, department_id: Optional[str] = None,
+    fee_heads: str = "", user = Depends(require_roles("administrator", "manager", "accountant")),
+):
+    """Exports exactly what fee_update_students() would display for the same filters/columns."""
+    import io, csv as _csv
+    rows = await fee_update_students(academic_year, class_id, section, medium, stream, department_id, fee_heads, user)
+    wanted = [h.strip() for h in fee_heads.split(",") if h.strip()]
+    buf = io.StringIO()
+    w = _csv.writer(buf)
+    header = ["Class", "Section", "Medium", "Department/Stream", "Admission No.", "Student Name",
+              "Total Fee (Overall)", "Total Paid (Overall)", "Balance (Overall)"]
+    for h in wanted:
+        header += [f"{h} - Current", f"{h} - Paid", f"{h} - Balance"]
+    w.writerow(header)
+    for r in rows:
+        line = [r["class_name"], r["section"], r["medium"], r.get("department_name") or r.get("stream") or "", r["admission_no"], r["student_name"],
+                r.get("overall_total"), r.get("overall_paid"), r.get("overall_balance")]
+        for h in wanted:
+            fh = r["fee_heads"].get(h, {})
+            line += [fh.get("current"), fh.get("paid"), fh.get("balance")]
+        w.writerow(line)
+    await audit(user, "export", "fee_update_report", "", {"academic_year": academic_year, "filters": {"class_id": class_id, "section": section, "medium": medium, "stream": stream}, "fee_heads": wanted, "row_count": len(rows)})
+    return Response(content=buf.getvalue().encode("utf-8-sig"), media_type="text/csv",
+                     headers={"Content-Disposition": f'attachment; filename="Live_Fee_Update_{academic_year}.csv"'})
+
+# ---------------- CSV/Excel bulk import of per-student fee overrides ----------------
+# Writes ONLY to student_fee_overrides (the exact same collection/upsert semantics as
+# POST /students/{sid}/fee-overrides and POST /students/{sid}/fee-update) — never a
+# receipt, never a payment, never fee_structures (the shared class template). A "Bus Fee"
+# row is explicitly rejected here and pointed at the existing, already-complete
+# POST /bus-assignment/bulk-import instead, because Bus Fee is always read live from
+# bus_stops/bus_charges (see fee_update_students() above) — a student_fee_overrides row
+# for "Bus Fee" would be silently ignored, so this is refused rather than accepted and
+# quietly doing nothing. Re-importing the same file is always safe: every row is an
+# upsert keyed on (student_id, academic_year, fee_head_name), so importing twice just
+# re-applies the same values instead of creating a second, conflicting record.
+
+async def _classify_fee_update_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    classes = {c["id"]: c for c in await db.classes.find({}, {"_id": 0}).to_list(2000)}
+    seen: Dict[str, int] = {}
+    valid, invalid = [], []
+    for idx, r in enumerate(rows):
+        row_no = idx + 1
+        adm = str(r.get("admission_no", "")).strip()
+        academic_year = str(r.get("academic_year", "")).strip()
+        fee_head_name = str(r.get("fee_head_name", "")).strip()
+        if not adm:
+            invalid.append({"row": row_no, "error": "admission_no is required", "data": r}); continue
+        if not academic_year:
+            invalid.append({"row": row_no, "error": "academic_year is required", "data": r}); continue
+        if not fee_head_name:
+            invalid.append({"row": row_no, "error": "fee_head_name is required", "data": r}); continue
+        if fee_head_name not in FEE_HEAD_OPTIONS:
+            invalid.append({"row": row_no, "error": f"fee_head_name '{fee_head_name}' is not one of the recognised fee heads: {', '.join(FEE_HEAD_OPTIONS)}", "data": r}); continue
+        if fee_head_name == "Bus Fee":
+            invalid.append({"row": row_no, "error": "Bus Fee cannot be set here — it is always read live from the Bus Stop Master. Use Bus Assignment import (main_stop/sub_stop) instead.", "data": r}); continue
+        dup_key = f"{adm}|{academic_year}|{fee_head_name}"
+        if dup_key in seen:
+            invalid.append({"row": row_no, "error": f"Duplicate row — admission_no '{adm}' + fee_head '{fee_head_name}' + academic_year '{academic_year}' already appears at row {seen[dup_key]} in this file", "data": r}); continue
+        seen[dup_key] = row_no
+        student = await db.students.find_one({"admission_no": adm}, {"_id": 0})
+        if not student:
+            invalid.append({"row": row_no, "error": f"No student found with admission_no '{adm}'", "data": r}); continue
+        cls = classes.get(student.get("class_id"), {})
+        row_class = str(r.get("class_name") or "").strip()
+        row_medium = str(r.get("medium") or "").strip()
+        row_stream = str(r.get("stream") or "").strip()
+        mismatch = None
+        if row_class and row_class != cls.get("name"):
+            mismatch = f"row says Class '{row_class}' but student '{student['name']}' ({adm}) is actually in {cls.get('name')}"
+        elif row_medium and row_medium != student.get("medium"):
+            mismatch = f"row says Medium '{row_medium}' but student '{student['name']}' ({adm}) is actually {student.get('medium')}"
+        elif row_stream and student.get("stream") and row_stream != student.get("stream"):
+            mismatch = f"row says Stream '{row_stream}' but student '{student['name']}' ({adm}) is actually {student.get('stream')}"
+        if mismatch:
+            invalid.append({"row": row_no, "error": f"Class/group mismatch — {mismatch}. Student's class was NOT changed.", "data": r}); continue
+        try:
+            fee_amount = float(r.get("fee_amount") or r.get("total_amount") or 0)
+        except (TypeError, ValueError):
+            invalid.append({"row": row_no, "error": "fee_amount must be a number", "data": r}); continue
+        if fee_amount <= 0:
+            invalid.append({"row": row_no, "error": "fee_amount must be positive", "data": r}); continue
+
+        installments = []
+        for n in (1, 2, 3, 4):
+            amt = str(r.get(f"installment_{n}_amount") or "").strip()
+            due = str(r.get(f"installment_{n}_due_date") or "").strip()
+            if not amt and not due:
+                continue
+            try:
+                installments.append({"amount": float(amt), "due_date": due})
+            except (TypeError, ValueError):
+                installments.append({"amount": None, "due_date": due})
+        clean_installments = None
+        if installments:
+            try:
+                validate_installments(fee_amount, installments)
+            except ValueError as e:
+                invalid.append({"row": row_no, "error": str(e), "data": r}); continue
+            clean_installments = [
+                {"installment_no": i + 1, "amount": float(inst["amount"]), "due_date": inst["due_date"]}
+                for i, inst in enumerate(installments)
+            ]
+
+        existing = await db.student_fee_overrides.find_one(
+            {"student_id": student["id"], "academic_year": academic_year, "fee_head_name": fee_head_name}, {"_id": 0}
+        )
+        valid.append({
+            "row": row_no, "admission_no": adm, "student_id": student["id"], "student_name": student["name"],
+            "academic_year": academic_year, "fee_head_name": fee_head_name, "fee_amount": fee_amount,
+            "installments": clean_installments, "reason": str(r.get("reason") or "").strip() or "CSV import",
+            "action": "update" if existing else "add",
+            "old_amount": existing.get("total_amount") if existing else None,
+        })
+    return {
+        "total_rows": len(rows), "valid_rows": len(valid), "invalid_rows": len(invalid),
+        "rows_to_add": sum(1 for v in valid if v["action"] == "add"),
+        "rows_to_update": sum(1 for v in valid if v["action"] == "update"),
+        "valid": valid, "invalid": invalid,
+    }
+
+@router.post("/fee-update/bulk-import")
+async def bulk_import_fee_overrides(body: Dict[str, Any],
+                                     user = Depends(require_roles("administrator", "manager", "accountant"))):
+    """CSV/Excel bulk import for per-student fee heads (Tuition Fee, Admission Fee, etc.),
+    with optional 1-4 installments. Matches students by admission_no ONLY. Pass `preview: true`
+    to validate/classify every row (exact row + reason for anything invalid) WITHOUT writing
+    anything — call again with `preview` omitted to commit. Every write is an upsert into
+    student_fee_overrides (the same collection and same create/update rule as the single-student
+    Fee Update / Installments UI), so this can never create a receipt, never touches a historical
+    payment, and re-importing the same file is always safe."""
+    rows: List[Dict[str, Any]] = body.get("rows", [])
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "rows must be a non-empty array")
+    preview = bool(body.get("preview"))
+    result = await _classify_fee_update_rows(rows)
+    if preview:
+        return {**result, "committed": False}
+
+    batch_id = body.get("batch_id") or gen_id()
+    created = updated = 0
+    for v in result["valid"]:
+        now = now_iso()
+        doc = {
+            "student_id": v["student_id"], "academic_year": v["academic_year"], "fee_head_name": v["fee_head_name"],
+            "total_amount": v["fee_amount"], "installments": v["installments"], "reason": v["reason"],
+            "updated_at": now, "updated_by": user["name"], "import_batch_id": batch_id,
+        }
+        existing = await db.student_fee_overrides.find_one({
+            "student_id": v["student_id"], "academic_year": v["academic_year"], "fee_head_name": v["fee_head_name"],
+        })
+        if existing:
+            await db.student_fee_overrides.update_one({"id": existing["id"]}, {"$set": doc})
+            oid = existing["id"]
+            updated += 1
+        else:
+            oid = gen_id()
+            doc.update({"id": oid, "created_at": now, "created_by": user["name"]})
+            await db.student_fee_overrides.insert_one(doc)
+            created += 1
+        await audit(user, "csv_import", "student_fee_override", oid, {
+            "student_id": v["student_id"], "admission_no": v["admission_no"], "academic_year": v["academic_year"],
+            "fee_head_name": v["fee_head_name"], "old_amount": v["old_amount"], "new_amount": v["fee_amount"],
+            "reason": v["reason"], "batch_id": batch_id,
+        })
+    await audit(user, "bulk_import", "student_fee_override", batch_id, {
+        "created": created, "updated": updated, "invalid": result["invalid_rows"], "total_rows": result["total_rows"],
+    })
+    return {"created": created, "skipped": updated, "errors": result["invalid"],
+            "total": result["total_rows"], "batch_id": batch_id, "committed": True}
+
+@router.post("/fee-update/bulk-delete")
+async def bulk_delete_fee_overrides(body: Dict[str, Any], user = Depends(require_roles("administrator", "manager"))):
+    """Undo a CSV import batch. Deletes only the override rows created/updated by that exact
+    batch_id — reverting each affected student to whatever they had before (the shared
+    fee_structure item, or a still-earlier override if one existed and this batch merely
+    updated its fields is NOT restored automatically, since the prior value was already
+    overwritten — this mirrors the same limitation already accepted for every other bulk
+    import's undo in this app). Never touches a receipt or payment either way."""
+    batch_id = body.get("batch_id")
+    if not batch_id:
+        raise HTTPException(400, "batch_id is required")
+    res = await db.student_fee_overrides.delete_many({"import_batch_id": batch_id})
+    await audit(user, "bulk_delete", "student_fee_override", batch_id, {"deleted": res.deleted_count})
+    return {"deleted": res.deleted_count, "protected_referenced": 0}
+
 @router.get("/fee-details")
 async def list_fee_details(academic_year: Optional[str] = None, q: Optional[str] = None,
                             group_key: Optional[str] = None,
@@ -266,9 +771,12 @@ async def list_fee_details(academic_year: Optional[str] = None, q: Optional[str]
     if group_key:
         query["group_key"] = group_key
     if q:
+        # re.escape - see students.py's list_students() for the same fix and
+        # rationale: literal search text, never executable regex syntax.
+        safe_q = re.escape(q)
         query["$or"] = [
-            {"admission_no": {"$regex": q, "$options": "i"}},
-            {"student_name": {"$regex": q, "$options": "i"}},
+            {"admission_no": {"$regex": safe_q, "$options": "i"}},
+            {"student_name": {"$regex": safe_q, "$options": "i"}},
         ]
     return await db.fee_details.find(query, {"_id": 0}).sort("student_name", 1).to_list(2000)
 

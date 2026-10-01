@@ -5,6 +5,7 @@ import { TrendingUp, Receipt, Bell, AlertTriangle, Clock, CheckCircle2, ShieldAl
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import OnboardingPopover from '@/components/OnboardingPopover';
+import useLiveRefresh from '@/lib/useLiveRefresh';
 
 const KPI = ({ label, value, hint, icon: Icon, tone = 'default', testid }) => {
   const tones = {
@@ -31,30 +32,17 @@ export default function Dashboard() {
   const [diag, setDiag] = useState(null);
   const nav = useNavigate();
   const { user } = useAuth();
+  const loadDashboard = () => api.get('/dashboard').then(r => setD(r.data)).catch(() => {});
   useEffect(() => {
-    const loadDashboard = () => api.get('/dashboard').then(r => setD(r.data)).catch(() => {});
     loadDashboard();
     api.get('/diagnostics/latest').then(r => setDiag(r.data)).catch(() => {});
-
-    // No server-push infrastructure exists in this app (pure REST, see
-    // sync.py) - this dashboard is the one screen that must reflect a
-    // transaction made on a completely different, idle PC without anyone
-    // touching it, so it polls on a short interval AND re-fetches the
-    // instant the tab/window comes back from being hidden, asleep, or
-    // offline - covering "walked away and came back" as well as "sat open
-    // the whole time" without needing a manual refresh either way.
-    const t = setInterval(loadDashboard, 10000);
-    const onVisible = () => { if (document.visibilityState === 'visible') loadDashboard(); };
-    document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('focus', loadDashboard);
-    window.addEventListener('online', loadDashboard);
-    return () => {
-      clearInterval(t);
-      document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('focus', loadDashboard);
-      window.removeEventListener('online', loadDashboard);
-    };
   }, []);
+  // No server-push infrastructure exists in this app (pure REST, see
+  // sync.py) - the Dashboard must reflect a transaction made on a
+  // completely different, idle PC without anyone touching it, so it polls
+  // on a short interval AND re-fetches the instant the tab/window comes
+  // back from being hidden, asleep, or offline.
+  useLiveRefresh(loadDashboard, 10000);
   if (!d) return <div className="p-8 text-sm text-slate-500">Loading…</div>;
 
   // Overnight-fail banner: last snapshot within 30h AND failed

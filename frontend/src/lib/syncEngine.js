@@ -240,8 +240,29 @@ export async function syncNow() {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(), ...deviceAuthHeaders() },
       body: JSON.stringify({ device_id: deviceId, app_version: '1.0.0', pending_count: stillPending.length }),
     });
-    if (heartbeatRes.status === 401 || heartbeatRes.status === 403) {
-      setState({ status: 'error', lastError: 'This device\'s credential or registration was rejected by the Main Server.' });
+    if (heartbeatRes.status === 403) {
+      // The backend raises 403 from _check_device_auth for exactly one reason:
+      // existing.revoked is true (see routers/sync.py). Its own design intent
+      // is explicit: "cannot heartbeat/pull/push again until it registers
+      // under a fresh device_id". Without this, a revoked installation gets
+      // stuck retrying the same dead device_id forever - a permanent,
+      // unrecoverable Sync Error that looks like a live production outage
+      // even though every other device is syncing fine. Clearing the stored
+      // id lets the very next tick self-heal via normal first-heartbeat
+      // auto-registration; queued offline operations are keyed by their own
+      // local_id in IndexedDB, independent of device_id, so nothing queued
+      // is lost by this.
+      localStorage.removeItem(DEVICE_ID_KEY);
+      localStorage.removeItem(DEVICE_SECRET_KEY);
+      setState({ status: 'error', lastError: 'This device was revoked by an administrator. Re-registering automatically...' });
+      return state;
+    }
+    if (heartbeatRes.status === 401) {
+      // Distinct from revoked: an admin-assigned device password was rejected.
+      // Auto-generating a new device_id here would silently bypass that
+      // password instead of fixing it, so this one surfaces for a human to
+      // resolve (reset the device's password) rather than self-healing.
+      setState({ status: 'error', lastError: 'This device\'s credential was rejected by the Main Server. Ask an administrator to reset its device password.' });
       return state;
     }
 

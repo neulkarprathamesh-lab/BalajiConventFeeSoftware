@@ -36,9 +36,41 @@ const KINDS = {
       ['EP', 'Class 3', '2026-27', 'Tuition Q1', 2900],
       ['EP', 'Class 3', '2026-27', 'Tuition Q2', 2600],
       ['EP', 'Class 3', '2026-27', 'Tuition Q3', 2800],
-      ['JC', 'Class 12 - Science', '2026-27', 'Tuition Fee', 10500],
+      ['JC', 'Class 12', '2026-27', 'Tuition Fee', 10500],
     ],
     idKeyForUndo: null,
+  },
+  fee_update: {
+    label: 'Fee Update',
+    endpoint: '/fee-update/bulk-import',
+    undoEndpoint: '/fee-update/bulk-delete',
+    filename: 'balaji_fee_update_template.xlsx',
+    required: ['admission_no', 'academic_year', 'fee_head_name', 'fee_amount'],
+    optional: ['class_name', 'medium', 'stream',
+      'installment_1_amount', 'installment_1_due_date', 'installment_2_amount', 'installment_2_due_date',
+      'installment_3_amount', 'installment_3_due_date', 'installment_4_amount', 'installment_4_due_date',
+      'reason'],
+    hint: 'Sets/updates a per-student fee head (e.g. Tuition Fee) for one academic year — never a receipt. Leave installment columns blank for a single lump-sum amount. "Bus Fee" is not accepted here — use the Bus Assignment tab instead.',
+    sample: [
+      ['BC-EP-101', '2026-27', 'Tuition Fee', 20000, 'Class 3', 'English Medium', '', 5000, '2026-06-10', 5000, '2026-08-10', 5000, '2026-10-10', 5000, '2026-12-10', 'Sibling installment plan'],
+      ['BC-JC-088', '2026-27', 'Admission Fee', 8500, 'Class 11', '', 'Science', '', '', '', '', '', '', '', '', ''],
+    ],
+    idKeyForUndo: null,
+  },
+  bus_assignment: {
+    label: 'Bus Assignment',
+    endpoint: '/bus-assignment/bulk-import',
+    undoEndpoint: null,
+    filename: 'balaji_bus_assignment_template.xlsx',
+    required: ['admission_no', 'bus_required'],
+    optional: ['main_stop', 'sub_stop'],
+    hint: 'bus_required: Yes/No. When Yes, main_stop + sub_stop must exactly match an active row in the Bus Stop Master — an unrecognised stop is rejected, never auto-created. When No, the student is removed from the bus.',
+    sample: [
+      ['BC-EP-101', 'Yes', 'Butibori', 'Main Chowk'],
+      ['BC-MP-045', 'No', '', ''],
+    ],
+    idKeyForUndo: null,
+    resultKeys: { created: 'assigned', skipped: 'removed' },
   },
 };
 const BATCH = 10;
@@ -102,7 +134,7 @@ export default function ImportExcel() {
     ];
     lk.getRow(1).font = { bold: true };
     const mediumOptions = ['English Medium', 'Semi Medium (Marathi)', 'Junior College'];
-    const streamOptions = ['Arts', 'Commerce', 'Science', 'Electronics', 'Fisheries'];
+    const streamOptions = ['Arts', 'Commerce', 'Science', 'Bi-Focal'];
     const fyOptions     = ['yes', 'no'];
     const stopRows = busStops.length ? busStops : [{ stop_no: '', stop_name: '(load bus stops via Admin → Bus Routes → Seed 2026-27)' }];
     const maxRows = Math.max(mediumOptions.length, streamOptions.length, fyOptions.length, stopRows.length);
@@ -137,7 +169,7 @@ export default function ImportExcel() {
       }
     };
     attach('medium', '=MediaList',  { allowBlank: false, error: 'Choose English Medium / Semi Medium (Marathi) / Junior College' });
-    attach('stream', '=StreamList', { allowBlank: true,  error: 'Choose Arts, Commerce, Science, Electronics or Fisheries' });
+    attach('stream', '=StreamList', { allowBlank: true,  error: 'Choose Arts, Commerce, Science or Bi-Focal' });
     attach('first_year_in_college', '=FYList', { allowBlank: true });
     if (stopRows.length && stopRows[0]?.stop_no !== '') {
       attach('bus_stop_no', '=BusStopList', { allowBlank: true, error: 'Pick a stop number from the master list' });
@@ -219,7 +251,8 @@ export default function ImportExcel() {
       setProgress(p => ({ ...p, current: `${current} (row ${i+1})`, done: i }));
       try {
         const { data } = await api.post(spec.endpoint, { rows: batch, batch_id: bid });
-        added += data.created; skipped += data.skipped;
+        const rk = spec.resultKeys || { created: 'created', skipped: 'skipped' };
+        added += data[rk.created] || 0; skipped += data[rk.skipped] || 0;
         for (const e of (data.errors || [])) errs.push({ ...e, row: i + e.row });
         if (spec.idKeyForUndo) for (const b of batch) if (b[spec.idKeyForUndo]) idsThisRun.push(b[spec.idKeyForUndo]);
       } catch (ex) {
@@ -306,7 +339,7 @@ export default function ImportExcel() {
             </button>
           ) : (
             <div className="mt-4 space-y-2">
-              {batchId && (
+              {batchId && spec.undoEndpoint && (
                 <button data-testid="undo-import" onClick={undoImport} className="h-10 px-4 border-2 border-red-300 text-red-700 hover:bg-red-50 rounded text-sm w-full flex items-center justify-center gap-2">
                   <Undo2 className="w-4 h-4" /> Undo Last Import{kind!=='students' ? '' : ` (${importedIds.length} students)`}
                 </button>
@@ -349,8 +382,8 @@ export default function ImportExcel() {
             <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden mb-4"><div className="h-full bg-gradient-to-r from-blue-500 to-emerald-500 transition-all duration-300" style={{ width: `${pct}%` }} /></div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
               <Stat icon={FileSpreadsheet} label={`Total in Excel`} value={rows.length} tone="text-slate-900" />
-              <Stat icon={CheckCircle2} label={kind!=='students' ? 'Created' : 'Added'} value={progress.added} tone="text-emerald-700" />
-              <Stat icon={AlertTriangle} label={kind!=='students' ? 'Updated' : 'Skipped'} value={progress.skipped} tone="text-amber-700" />
+              <Stat icon={CheckCircle2} label={kind === 'students' ? 'Added' : kind === 'bus_assignment' ? 'Assigned' : 'Created'} value={progress.added} tone="text-emerald-700" />
+              <Stat icon={AlertTriangle} label={kind === 'students' ? 'Skipped' : kind === 'bus_assignment' ? 'Removed' : 'Updated'} value={progress.skipped} tone="text-amber-700" />
               <Stat icon={XCircle} label="Errors" value={progress.errors.length} tone="text-red-700" />
             </div>
             <div className="grid grid-cols-2 gap-3 mb-3 text-sm">
