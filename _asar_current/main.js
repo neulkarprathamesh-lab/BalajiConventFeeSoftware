@@ -20,6 +20,21 @@ const updater = require('./updater/updater');
 const clientUpdate = require('./updater/client-update');
 
 // -----------------------------------------------------------------------------
+// The offline app-shell cache (public/sw.js, registered from frontend/src/
+// index.js) needs a Service Worker, and Chromium only allows Service Workers
+// on a "secure context" - localhost/127.0.0.1 or https. A plain
+// http://192.168.0.116 LAN origin does NOT qualify by default, which would
+// silently disable the entire offline-shell-cache system for every real
+// Client PC (it only ever worked when running ON the Main Server itself, via
+// 127.0.0.1). Since the Main Server's address is now fixed/permanent, it's
+// safe to explicitly trust exactly that one known origin as secure - this
+// must be set before app.whenReady()/any window is created.
+app.commandLine.appendSwitch(
+  'unsafely-treat-insecure-origin-as-secure',
+  'http://192.168.0.116:3000,http://192.168.0.116:8001'
+);
+
+// -----------------------------------------------------------------------------
 // In-memory log ring buffer, for the diagnostic report ("Application logs").
 // Not written to disk continuously - only captured into a report on demand,
 // so there's no persistent log file to manage/rotate.
@@ -51,6 +66,12 @@ const BACKEND_PORT = 8001;
 const FRONTEND_PORT = 3000;
 const PROBE_TIMEOUT_MS = 800;
 const MANUAL_TIMEOUT_MS = 5000;
+// The Main Server's LAN address is now fixed/permanent (static IP, never
+// DHCP) - see installer-src/BalajiFeeHub-Client.iss's matching default. A
+// Client PC that has never connected before can go straight here instead of
+// showing a manual "enter server IP" screen; only a genuinely fresh Main
+// Server PC install (which self-detects via 127.0.0.1 first, below) differs.
+const FIXED_MAIN_SERVER_IP = '192.168.0.116';
 
 function readConfig() {
   try {
@@ -343,16 +364,19 @@ function createMainWindow() {
     return { action: 'allow' };
   });
 
-  // If the loaded backend disappears (Main Server goes down), fall back to connect -
-  // UNLESS this is the very first, quick, startup load attempt (see attemptQuickLoad
-  // below), in which case a dedicated one-time handler deals with it instead so a
-  // brand-new/never-connected launch still gets the full discovery flow, not just
-  // the abbreviated "lost connection" screen.
+  // If the Main Server goes down AFTER a successful connect (e.g. a mid-session
+  // reload while offline that the service worker's cache couldn't cover), do
+  // NOT throw the user back to a manual "Connect to Server" screen - the app
+  // must stay usable in Offline Mode with a small status indicator only (see
+  // SyncStatus.js / syncEngine.js on the frontend, which already polls
+  // /api/version in the background and auto-reconnects + resyncs the moment
+  // it's reachable again, with no restart and no user action needed). This
+  // only logs; "Change Main Server..." in the File menu remains the sole
+  // manual/deliberate way to reach connect.html.
   mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDesc, validatedURL) => {
     if (initialLoadPending) return;
     if (validatedURL && validatedURL.includes(`:${FRONTEND_PORT}`)) {
-      console.warn(`Lost connection to ${validatedURL} (${errorCode} ${errorDesc}) - showing connect screen`);
-      showConnectScreen(`Lost connection to Main Server at ${currentServerIp}.`);
+      console.warn(`Lost connection to ${validatedURL} (${errorCode} ${errorDesc}) - staying on current view (offline mode)`);
     }
   });
 
@@ -392,9 +416,17 @@ function createMainWindow() {
 // only changes WHICH screen loads first.
 let initialLoadPending = false;
 
-function attemptQuickLoad() {
+async function attemptQuickLoad() {
   const cfg = readConfig();
-  const ip = cfg.serverIp || '127.0.0.1';
+  let ip = cfg.serverIp;
+  if (!ip) {
+    // Never connected before on this PC. Quick local self-check in case this
+    // install IS the Main Server itself; otherwise go straight to the fixed,
+    // permanent Main Server address - never a blank/manual-entry screen for
+    // this, the normal first-launch case on every Client PC now that the
+    // Main Server's address never changes.
+    ip = (await probeServer('127.0.0.1', 1200)) ? '127.0.0.1' : FIXED_MAIN_SERVER_IP;
+  }
   initialLoadPending = true;
   clearCacheIfVersionChanged().finally(() => {
     if (!mainWindow) return;
@@ -751,6 +783,39 @@ ipcMain.handle('diagnostics:openLocation', async (_event, filePath) => {
 // -----------------------------------------------------------------------------
 // Updater
 // -----------------------------------------------------------------------------
+let clientUpdateWindow = null;
+
+function openClientUpdateProgressWindow(info) {
+  if (clientUpdateWindow && !clientUpdateWindow.isDestroyed()) {
+    clientUpdateWindow.focus();
+    return clientUpdateWindow;
+  }
+  clientUpdateWindow = new BrowserWindow({
+    width: 560,
+    height: 500,
+    parent: mainWindow || undefined,
+    modal: false,
+    title: 'Balaji FeeHub - Updating',
+    icon: path.join(__dirname, 'icon.ico'),
+    autoHideMenuBar: true,
+    backgroundColor: '#0b1220',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  clientUpdateWindow.loadURL('file://' + path.join(__dirname, 'renderer', 'client-update.html'));
+  clientUpdateWindow.on('closed', () => { clientUpdateWindow = null; });
+  return clientUpdateWindow;
+}
+
+function sendClientUpdateProgress(data) {
+  if (clientUpdateWindow && !clientUpdateWindow.isDestroyed()) {
+    clientUpdateWindow.webContents.send('client-update:progress', data);
+  }
+}
+
 let updateWindow = null;
 
 function openUpdateWindow() {
@@ -873,19 +938,24 @@ async function runClientUpdateCheck({ silent }) {
 }
 
 async function performClientUpdate(info) {
+  openClientUpdateProgressWindow(info);
+  // Every stage sent below corresponds to a real completed step, not a
+  // timed/faked animation: download % is real byte progress from the actual
+  // HTTP transfer; 'verifying'/'signature' are sent only once those genuine
+  // checks have actually passed (they're fast, in-memory operations with no
+  // natural sub-progress of their own, unlike the download).
+  sendClientUpdateProgress({ stage: 'downloading', installed: info.installed, remote: info.remote, received: 0, total: info.packageSize || 0 });
   try {
-    const dl = await clientUpdate.downloadClientUpdate(info.downloadUrl, info.expectedSha256, () => {});
+    const dl = await clientUpdate.downloadClientUpdate(info.downloadUrl, info.expectedSha256, (received, total) => {
+      sendClientUpdateProgress({ stage: 'downloading', received, total });
+    });
+    sendClientUpdateProgress({ stage: 'verifying' });
     const { appAsarBuf, expectedSha } = clientUpdate.verifyAndExtractPackage(dl.path, clientUpdate.readInstalledVersion());
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      await dialog.showMessageBox(mainWindow, {
-        type: 'info', title: 'Installing Update',
-        message: `Installing Balaji FeeHub v${info.remote}...`,
-        detail: 'The application will restart automatically. Your student data, offline cache, PC name, and Main Server connection are never affected by this update.',
-        buttons: ['OK'],
-      });
-    }
+    sendClientUpdateProgress({ stage: 'signature' });
+    sendClientUpdateProgress({ stage: 'finalizing' });
     await clientUpdate.applyClientUpdateAndRestart(appAsarBuf, expectedSha, info.remote);
   } catch (e) {
+    sendClientUpdateProgress({ stage: 'failed', message: e.message || String(e) });
     if (mainWindow && !mainWindow.isDestroyed()) {
       dialog.showErrorBox('Update failed', `The update could not be applied safely, so nothing was changed.\n\n${e.message || e}`);
     }
