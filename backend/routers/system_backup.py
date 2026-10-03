@@ -6,7 +6,7 @@ Two trust boundaries:
     WPS_BACKUP_API_KEY in backend/.env, never by a user JWT.
   - Admin endpoints (run-now, retry-upload, history, verify) are the Backup / Disaster Recovery screen in
     the UI - gated by the normal administrator-role JWT, same as every other admin-only route.
-Neither path ever returns backup file contents, the encryption key, or Google credentials - only status.
+Neither path ever returns backup file contents, the encryption key, or cloud credentials - only status.
 """
 import os
 import shutil
@@ -37,6 +37,10 @@ def _status_payload() -> dict:
     return {
         "status": s.status, "date": s.date, "message": s.message, "trigger": s.trigger,
         "local_backup_size": s.local_backup_size, "local_backup_sha256": s.local_backup_sha256,
+        "phase": s.phase, "attempt": s.attempt, "max_attempts": s.max_attempts,
+        "local_backup_name": s.local_backup_name, "local_backup_size_bytes": s.local_backup_size,
+        "sync_state": s.sync_state, "sha256_verified": s.sha256_verified,
+        "collections_count": s.collections_count, "collections_list": s.collections_list,
         "cloud_verified": s.cloud_verified, "started_at": s.started_at, "completed_at": s.completed_at,
         "last_success_date": s.last_success_date,
         # Deliberately omits local_backup_path (server filesystem layout) and anything from keys/.
@@ -51,8 +55,8 @@ async def prepare_shutdown(_=Depends(require_wps_backup_key)):
     poll /status - this call itself never blocks for the full backup duration. If today's backup already
     succeeded, or one is already running, this returns that status without starting a second job."""
     today = be.today_str()
-    if be.STORE.state.status == "completed" and be.STORE.state.date == today and be.STORE.state.cloud_verified:
-        return {"status": "already_done", "message": f"Backup already completed and verified today ({today})."}
+    if be.STORE.state.status == "completed" and be.STORE.state.date == today:
+        return {"status": "already_done", "message": f"Backup already placed in the JioAICloud sync folder today ({today})."}
     if be.STORE.lock.locked():
         return {"status": "running", "message": "A backup is already in progress."}
 
@@ -73,8 +77,11 @@ async def get_status(_=Depends(require_wps_backup_key)):
 async def admin_status(user=Depends(require_roles("administrator"))):
     payload = _status_payload()
     payload["history"] = be.STORE.state.history[:50]
+    payload["legacy_history"] = be.STORE.state.legacy_history[:200]
     payload["local_backups"] = be.list_local_backups()
-    payload["gdrive_connected"] = be.GDRIVE_TOKEN_FILE.exists()
+    payload["sync_folder"] = str(be.JIO_SYNC_FOLDER)
+    payload["sync_folder_accessible"] = be.JIO_SYNC_FOLDER.is_dir() and os.access(be.JIO_SYNC_FOLDER, os.W_OK)
+    payload["placed_file"] = be.STORE.state.placed_file
     payload["encryption_key_present"] = be.ENCRYPTION_KEY_FILE.exists()
     return payload
 
@@ -106,7 +113,7 @@ async def verify_backup(filename: str, user=Depends(require_roles("administrator
     restorable, then deletes the scratch copy. Never touches production data."""
     safe_name = Path(filename).name  # strip any path components - never trust the raw input as a path
     target = be.LOCAL_DIR / safe_name
-    if not target.exists() or not safe_name.startswith("feehub-backup-"):
+    if not target.exists() or not (safe_name.startswith(be.BACKUP_FILE_PREFIX) or safe_name.startswith("feehub-backup-")):
         raise HTTPException(404, "Backup file not found.")
     scratch = be.BACKUP_ROOT / "_verify_scratch" / safe_name
     ok, message = be.verify_backup_file(target, scratch)

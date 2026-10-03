@@ -3,8 +3,11 @@ FeeHub disaster-recovery backup engine.
 
 Pipeline: mongodump (consistent, read-only export - never raw WiredTiger file
 copies while MongoDB is live) -> zip -> encrypt (Fernet/AES, key held outside
-the git-tracked source tree) -> upload to Google Drive via the official API
--> verify (size + md5Checksum match) -> record state.
+the git-tracked source tree) -> copy ONLY the encrypted file into the
+JioAICloud synced folder -> verify the copy (size stable + SHA-256 match) ->
+record state. JioAICloud exposes no official confirmation API, so a copy in
+the sync folder is reported as "placed in sync folder", never as "cloud
+upload confirmed".
 
 State is persisted to a JSON file so it survives backend restarts (the "is
 today's backup already done" check must work even if the service was
@@ -16,7 +19,7 @@ racing - callers that arrive while a job is running, or after one already
 succeeded today, get the current/cached state back immediately instead of
 starting a second one.
 
-Secrets (the Fernet key, the Google OAuth token) live only under
+Secrets (the Fernet key) live only under
 backend/keys/ on the LIVE server - that whole directory is already excluded
 from the git-tracked source tree (see 03-source-code/.gitignore) for the
 existing client-update signing key, so this reuses an already-established,
@@ -30,11 +33,13 @@ import os
 import shutil
 import stat
 import subprocess
+import time
 import zipfile
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("feehub.backup")
 
@@ -46,18 +51,20 @@ STATE_FILE = BACKUP_ROOT / "state.json"
 
 KEYS_DIR = Path(os.environ.get("FEEHUB_KEYS_DIR", r"C:\balaji-fee\backend\keys"))
 ENCRYPTION_KEY_FILE = KEYS_DIR / "backup_encryption.key"
-GDRIVE_TOKEN_FILE = KEYS_DIR / "gdrive_token.json"
-GDRIVE_CLIENT_SECRET_FILE = KEYS_DIR / "gdrive_client_secret.json"
-GDRIVE_FOLDER_ID_CACHE = KEYS_DIR / "gdrive_folder_id.txt"
 
-GDRIVE_FOLDER_NAME = "Balaji FeeHub Backups"
-GDRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"]  # least privilege: only files this app creates
 
 MONGO_HOST = os.environ.get("FEEHUB_BACKUP_MONGO_HOST", "127.0.0.1:27017")
 DB_NAME = os.environ.get("DB_NAME", "balaji_fee_db")
 
-DEFAULT_UPLOAD_GRACE_MINUTES = 15
-DEFAULT_UPLOAD_RETRY_SECONDS = 30
+KOLKATA = ZoneInfo("Asia/Kolkata")
+BACKUP_FILE_PREFIX = "FeeHub_Backup_"
+
+JIO_SYNC_FOLDER = Path(os.environ.get("FEEHUB_JIO_SYNC_FOLDER", r"C:\JioAiCloude\Fee  software backup\JC-Prathame-e100"))
+JIO_MAX_ATTEMPTS = 3
+JIO_ATTEMPT_TIMEOUT_SECONDS = float(os.environ.get("FEEHUB_JIO_ATTEMPT_TIMEOUT_MINUTES", "10")) * 60
+JIO_RETRY_DELAY_SECONDS = float(os.environ.get("FEEHUB_JIO_RETRY_DELAY_SECONDS", "30"))
+JIO_STABLE_POLL_SECONDS = float(os.environ.get("FEEHUB_JIO_STABLE_POLL_SECONDS", "3"))
+JIO_STABLE_POLLS_REQUIRED = 2
 
 
 def _ensure_dirs():
@@ -104,18 +111,29 @@ def get_or_create_encryption_key() -> bytes:
 @dataclass
 class BackupState:
     status: str = "idle"  # idle | running | completed | upload_failed_local_preserved | failed
-    date: str = ""  # YYYY-MM-DD this status applies to
+    date: str = ""  # DD-MM-YYYY (Asia/Kolkata) this status applies to
     message: str = ""
     trigger: str = ""
+    phase: str = "idle"  # idle | backing_up | placing_in_sync_folder | retry_wait | done | failed
+    attempt: int = 0
+    max_attempts: int = JIO_MAX_ATTEMPTS
     local_backup_path: Optional[str] = None
     local_backup_sha256: Optional[str] = None
     local_backup_size: Optional[int] = None
-    cloud_verified: bool = False
-    cloud_file_id: Optional[str] = None
+    local_backup_name: Optional[str] = None
+    sync_state: str = "none"  # none | placed_in_sync_folder | not_placed
+    sync_folder: Optional[str] = None
+    placed_file: Optional[str] = None
+    cloud_verified: bool = False  # always False: JioAICloud has no official confirmation API
+    sha256_verified: bool = False
+    collections_count: Optional[int] = None
+    collections_list: list = field(default_factory=list)
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     last_success_date: Optional[str] = None
     history: list = field(default_factory=list)
+    legacy_history: list = field(default_factory=list)  # audit records from the earlier Google Drive backup system
+    legacy_migrated: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -140,6 +158,28 @@ class BackupStateStore:
                 self.state = BackupState(**{k: v for k, v in data.items() if k in BackupState.__dataclass_fields__})
             except Exception:
                 logger.warning("Could not read existing backup state file; starting fresh.", exc_info=True)
+        self._migrate_legacy()
+
+    def _migrate_legacy(self):
+        """One-time: move every record from the earlier Google Drive backup system into legacy_history so the
+        current JioAICloud status never shows it. Nothing is deleted - the records stay as historical audit
+        history, and the old encrypted files stay on disk."""
+        s = self.state
+        if s.legacy_migrated:
+            return
+        s.legacy_history = list(s.legacy_history) + list(s.history)
+        s.history = []
+        if s.status in ("upload_failed_local_preserved", "failed", "completed", "running") and "Google" in (s.message or "") + (s.status or ""):
+            s.status = "idle"
+            s.phase = "idle"
+            s.message = ""
+            s.local_backup_path = None
+            s.local_backup_sha256 = None
+            s.local_backup_size = None
+            s.local_backup_name = None
+            s.sync_state = "none"
+        s.legacy_migrated = True
+        self.save()
 
     def save(self):
         try:
@@ -160,8 +200,16 @@ class BackupStateStore:
 STORE = BackupStateStore()
 
 
+def now_kolkata() -> datetime:
+    return datetime.now(KOLKATA)
+
+
 def today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    return now_kolkata().strftime("%d-%m-%Y")
+
+
+def backup_filename(stamp: datetime) -> str:
+    return f"{BACKUP_FILE_PREFIX}{stamp.strftime('%d-%m-%Y_%H-%M-%S')}.enc"
 
 
 # ---------------- mongodump ----------------
@@ -276,101 +324,142 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-# ---------------- Google Drive ----------------
-def _gdrive_creds():
-    from google.auth.transport.requests import Request
-    from google.oauth2.credentials import Credentials
-    if not GDRIVE_TOKEN_FILE.exists():
-        return None
-    creds = Credentials.from_authorized_user_file(str(GDRIVE_TOKEN_FILE), GDRIVE_SCOPES)
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        GDRIVE_TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
-    return creds
+# ---------------- JioAICloud synced folder ----------------
+def _remove_partial_copy(dest: Path):
+    for _ in range(5):
+        try:
+            dest.unlink(missing_ok=True)
+            return
+        except OSError:
+            time.sleep(1)  # a just-written file can be briefly locked by indexing/antivirus
+    logger.error("[FeeHubBackup] Could not remove a partial sync-folder copy at %s - remove it manually.", dest)
 
 
-def _gdrive_service():
-    from googleapiclient.discovery import build
-    creds = _gdrive_creds()
-    if not creds:
-        return None
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
-
-
-def _get_or_create_folder(service) -> str:
-    if GDRIVE_FOLDER_ID_CACHE.exists():
-        cached = GDRIVE_FOLDER_ID_CACHE.read_text(encoding="utf-8").strip()
-        if cached:
-            try:
-                f = service.files().get(fileId=cached, fields="id,trashed").execute()
-                if not f.get("trashed"):
-                    return cached
-            except Exception:
-                pass  # cached id no longer valid - fall through and re-resolve
-    q = f"name = '{GDRIVE_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    results = service.files().list(q=q, fields="files(id,name)").execute()
-    files = results.get("files", [])
-    if files:
-        folder_id = files[0]["id"]
-    else:
-        meta = {"name": GDRIVE_FOLDER_NAME, "mimeType": "application/vnd.google-apps.folder"}
-        folder_id = service.files().create(body=meta, fields="id").execute()["id"]
-    GDRIVE_FOLDER_ID_CACHE.write_text(folder_id, encoding="utf-8")
-    return folder_id
-
-
-def _upload_and_verify_sync(local_path: Path) -> tuple[bool, str, Optional[str]]:
-    """Synchronous (runs inside asyncio.to_thread) - the googleapiclient library is not async-native."""
-    from googleapiclient.http import MediaFileUpload
-    service = _gdrive_service()
-    if not service:
-        return False, (
-            "Google Drive is not connected yet. An administrator must run "
-            "scripts/setup_google_drive_backup.py once (interactive Google sign-in) - see "
-            "10-backup-restore/BACKUP_DISASTER_RECOVERY.md."
-        ), None
+def _copy_and_verify_into_sync_folder(src: Path, dest: Path, deadline: float) -> tuple[bool, str]:
+    expected_size = src.stat().st_size
+    expected_sha = _sha256_file(src)
+    created = False
     try:
-        folder_id = _get_or_create_folder(service)
-        media = MediaFileUpload(str(local_path), mimetype="application/octet-stream", resumable=True)
-        meta = {"name": local_path.name, "parents": [folder_id]}
-        request = service.files().create(body=meta, media_body=media, fields="id,name,size,md5Checksum")
-        response = None
-        while response is None:
-            status, response = request.next_chunk()  # resumable: safe to retry a single chunk on transient errors
-        file_id = response.get("id")
-
-        local_size = local_path.stat().st_size
-        local_md5 = hashlib.md5(local_path.read_bytes()).hexdigest()
-        remote_size = int(response.get("size", -1))
-        remote_md5 = response.get("md5Checksum")
-        if remote_size != local_size:
-            return False, f"Upload completed but size mismatch (local {local_size}, Drive reports {remote_size}) - not verified.", file_id
-        if remote_md5 and remote_md5 != local_md5:
-            return False, "Upload completed but checksum mismatch - not verified.", file_id
-        return True, f"Uploaded and verified on Google Drive (file id {file_id}, {local_size:,} bytes, md5 {remote_md5 or 'n/a'}).", file_id
+        with open(src, "rb") as fin, open(dest, "xb") as fout:
+            created = True
+            while True:
+                if time.time() > deadline:
+                    raise TimeoutError("copy into the sync folder exceeded the attempt time limit")
+                chunk = fin.read(1024 * 1024)
+                if not chunk:
+                    break
+                fout.write(chunk)
+        last_size = None
+        stable_polls = 0
+        while True:
+            if time.time() > deadline:
+                raise TimeoutError("the sync folder copy did not become size-stable before the attempt time limit")
+            size = dest.stat().st_size
+            stable_polls = stable_polls + 1 if (size == expected_size and size == last_size) else 0
+            last_size = size
+            if stable_polls >= JIO_STABLE_POLLS_REQUIRED:
+                break
+            time.sleep(JIO_STABLE_POLL_SECONDS)
+        if _sha256_file(dest) != expected_sha:
+            raise ValueError("SHA-256 of the sync folder copy does not match the local encrypted backup")
+        return True, "copy complete, size stable, SHA-256 matches the local encrypted backup"
     except Exception as ex:
-        return False, f"Google Drive upload failed: {ex}", None
+        if created:
+            _remove_partial_copy(dest)  # never leave a partial or mismatched copy behind
+        return False, str(ex)
 
 
-async def upload_and_verify(local_path: Path) -> tuple[bool, str, Optional[str]]:
-    return await asyncio.to_thread(_upload_and_verify_sync, local_path)
+def _place_in_sync_folder_once(src: Path, deadline: float) -> tuple[bool, str, Optional[Path]]:
+    if not JIO_SYNC_FOLDER.is_dir():
+        return False, f"JioAICloud sync folder is not accessible: {JIO_SYNC_FOLDER}", None
+    if not os.access(JIO_SYNC_FOLDER, os.W_OK):
+        return False, f"JioAICloud sync folder is not writable: {JIO_SYNC_FOLDER}", None
+    dest = JIO_SYNC_FOLDER / src.name
+    if dest.exists():
+        if _sha256_file(dest) == _sha256_file(src):
+            return True, "already present in the sync folder with matching SHA-256", dest
+        return False, f"A different file already exists in the sync folder with this name ({src.name}); refusing to overwrite.", None
+    ok, detail = _copy_and_verify_into_sync_folder(src, dest, deadline)
+    return ok, detail, dest if ok else None
+
+
+async def _place_in_sync_folder_with_retries(encrypted_path: Path):
+    state = STORE.state
+    today = today_str()
+    last_message = "not attempted"
+    for attempt in range(1, JIO_MAX_ATTEMPTS + 1):
+        state.attempt = attempt
+        state.phase = "placing_in_sync_folder"
+        state.message = f"Copying encrypted backup to JioAICloud sync folder (attempt {attempt}/{JIO_MAX_ATTEMPTS})..."
+        STORE.save()
+        STORE.record_history("sync_attempt_started", f"attempt {attempt}/{JIO_MAX_ATTEMPTS}")
+        deadline = time.time() + JIO_ATTEMPT_TIMEOUT_SECONDS
+        try:
+            ok, detail, dest = await asyncio.to_thread(_place_in_sync_folder_once, encrypted_path, deadline)
+        except Exception as ex:
+            ok, detail, dest = False, f"unexpected error: {ex}", None
+        if ok:
+            state.status = "completed"
+            state.phase = "done"
+            state.sha256_verified = True
+            state.sync_state = "placed_in_sync_folder"
+            state.sync_folder = str(JIO_SYNC_FOLDER)
+            state.placed_file = str(dest)
+            state.message = (f"Backup ready: {encrypted_path.name} placed in the JioAICloud sync folder "
+                             f"and verified (SHA-256 matches). Cloud upload is NOT independently confirmed.")
+            state.cloud_verified = False
+            state.completed_at = datetime.now(timezone.utc).isoformat()
+            state.last_success_date = today
+            STORE.save()
+            STORE.record_history("sync_folder_placed", f"attempt {attempt}/{JIO_MAX_ATTEMPTS}: {detail}")
+            return
+        last_message = detail
+        logger.warning("[FeeHubBackup] JioAICloud sync attempt %d/%d failed: %s", attempt, JIO_MAX_ATTEMPTS, detail)
+        STORE.record_history("sync_attempt_failed", f"attempt {attempt}/{JIO_MAX_ATTEMPTS}: {detail}")
+        if attempt < JIO_MAX_ATTEMPTS:
+            state.phase = "retry_wait"
+            state.message = f"Attempt {attempt}/{JIO_MAX_ATTEMPTS} failed: {detail}. Retrying..."
+            STORE.save()
+            await asyncio.sleep(JIO_RETRY_DELAY_SECONDS)
+
+    # All attempts exhausted: the local encrypted backup is kept and shutdown is allowed to continue.
+    state.status = "upload_failed_local_preserved"
+    state.phase = "failed"
+    state.sync_state = "not_placed"
+    state.placed_file = None
+    state.message = (f"LOCAL_BACKUP_COMPLETE_SYNC_FAILED_AFTER_{JIO_MAX_ATTEMPTS}_ATTEMPTS: {last_message}. "
+                     f"Local encrypted backup preserved. Shutdown is allowed to continue.")
+    state.cloud_verified = False
+    state.sha256_verified = False
+    state.completed_at = datetime.now(timezone.utc).isoformat()
+    STORE.save()
+    STORE.record_history("sync_failed", state.message)
 
 
 # ---------------- Orchestration ----------------
-async def _do_backup_and_upload(trigger: str, grace_minutes: int, retry_seconds: int):
+async def _do_backup_and_upload(trigger: str):
     state = STORE.state
     today = today_str()
     state.status = "running"
+    state.phase = "backing_up"
     state.date = today
     state.trigger = trigger
     state.message = "Backup starting..."
+    state.attempt = 0
+    state.sync_state = "none"
+    state.sync_folder = None
+    state.placed_file = None
     state.started_at = datetime.now(timezone.utc).isoformat()
     state.completed_at = None
     state.cloud_verified = False
     STORE.save()
     STORE.record_history("backup_started", f"trigger={trigger}")
 
-    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    stamp_dt = now_kolkata()
+    while (LOCAL_DIR / backup_filename(stamp_dt)).exists():
+        await asyncio.sleep(1)  # never overwrite: wait for the next second so the timestamp is unique
+        stamp_dt = now_kolkata()
+    stamp = stamp_dt.strftime("%d-%m-%Y_%H-%M-%S")
     dump_dir = STAGING_DIR / f"dump-{stamp}"
     ok, msg = await _run_mongodump(dump_dir)
     if not ok:
@@ -380,6 +469,10 @@ async def _do_backup_and_upload(trigger: str, grace_minutes: int, retry_seconds:
         STORE.record_history("backup_failed", msg)
         shutil.rmtree(dump_dir, ignore_errors=True)
         return
+    collection_files = sorted((dump_dir / DB_NAME).glob("*.bson"))
+    state.collections_list = [f.stem for f in collection_files]
+    state.collections_count = len(collection_files)
+    state.sha256_verified = False
 
     zip_path = STAGING_DIR / f"feehub-{stamp}.zip"
     try:
@@ -387,7 +480,7 @@ async def _do_backup_and_upload(trigger: str, grace_minutes: int, retry_seconds:
     finally:
         shutil.rmtree(dump_dir, ignore_errors=True)  # never leave the raw unencrypted dump on disk
 
-    encrypted_path = LOCAL_DIR / f"feehub-backup-{stamp}.enc"
+    encrypted_path = LOCAL_DIR / backup_filename(stamp_dt)
     try:
         _encrypt_file(zip_path, encrypted_path)
     except Exception as ex:
@@ -401,58 +494,22 @@ async def _do_backup_and_upload(trigger: str, grace_minutes: int, retry_seconds:
         zip_path.unlink(missing_ok=True)  # never leave the unencrypted zip on disk either
 
     state.local_backup_path = str(encrypted_path)
+    state.local_backup_name = encrypted_path.name
     state.local_backup_size = encrypted_path.stat().st_size
     state.local_backup_sha256 = _sha256_file(encrypted_path)
     state.message = f"Local encrypted backup complete: {encrypted_path.name} ({state.local_backup_size:,} bytes)."
     STORE.save()
     STORE.record_history("backup_completed", state.message)
 
-    await _upload_with_grace_period(encrypted_path, grace_minutes, retry_seconds)
+    await _place_in_sync_folder_with_retries(encrypted_path)
 
 
-async def _upload_with_grace_period(encrypted_path: Path, grace_minutes: int, retry_seconds: int):
-    state = STORE.state
-    today = today_str()
-    STORE.record_history("upload_started", encrypted_path.name)
-    deadline = datetime.now().timestamp() + grace_minutes * 60
-    attempt = 0
-    last_message = "Upload not attempted."
-    while True:
-        attempt += 1
-        ok, message, file_id = await upload_and_verify(encrypted_path)
-        last_message = message
-        if ok:
-            state.status = "completed"
-            state.message = message
-            state.cloud_verified = True
-            state.cloud_file_id = file_id
-            state.completed_at = datetime.now(timezone.utc).isoformat()
-            state.last_success_date = today
-            STORE.save()
-            STORE.record_history("upload_completed", message)
-            STORE.record_history("backup_verification", "size+md5 verified against Google Drive")
-            return
-        logger.warning("[FeeHubBackup] Upload attempt %d failed: %s", attempt, message)
-        if datetime.now().timestamp() >= deadline:
-            break
-        await asyncio.sleep(min(retry_seconds, max(1, deadline - datetime.now().timestamp())))
-
-    # Grace period expired: local backup is preserved, never silently reported as a cloud success.
-    state.status = "upload_failed_local_preserved"
-    state.message = f"LOCAL_BACKUP_COMPLETE_CLOUD_UPLOAD_FAILED: {last_message}"
-    state.cloud_verified = False
-    state.completed_at = datetime.now(timezone.utc).isoformat()
-    STORE.save()
-    STORE.record_history("upload_failed", last_message)
-
-
-async def run_backup_cycle(trigger: str, grace_minutes: int = DEFAULT_UPLOAD_GRACE_MINUTES,
-                            retry_seconds: int = DEFAULT_UPLOAD_RETRY_SECONDS) -> BackupState:
+async def run_backup_cycle(trigger: str) -> BackupState:
     """Idempotent entry point. Safe to call repeatedly (duplicate shutdown signal, the daily timer firing
     close to a shutdown, a retried HTTP request): only ever runs one job at a time, and never starts a new
-    one if today's already succeeded."""
+    one if today's backup was already placed in the sync folder."""
     today = today_str()
-    if STORE.state.status == "completed" and STORE.state.date == today and STORE.state.cloud_verified:
+    if STORE.state.status == "completed" and STORE.state.date == today:
         return STORE.state  # already done today - nothing to do
 
     if STORE.lock.locked():
@@ -460,24 +517,33 @@ async def run_backup_cycle(trigger: str, grace_minutes: int = DEFAULT_UPLOAD_GRA
 
     async with STORE.lock:
         # Re-check inside the lock in case another caller finished while we were waiting for it.
-        if STORE.state.status == "completed" and STORE.state.date == today and STORE.state.cloud_verified:
+        if STORE.state.status == "completed" and STORE.state.date == today:
             return STORE.state
-        await _do_backup_and_upload(trigger, grace_minutes, retry_seconds)
+        try:
+            await _do_backup_and_upload(trigger)
+        except Exception as ex:
+            logger.error("[FeeHubBackup] Backup job crashed.", exc_info=True)
+            STORE.state.status = "failed"
+            STORE.state.phase = "failed"
+            STORE.state.message = f"Backup job failed unexpectedly: {ex}. Shutdown is allowed to continue."
+            STORE.state.completed_at = datetime.now(timezone.utc).isoformat()
+            STORE.save()
+            STORE.record_history("backup_failed", STORE.state.message)
     return STORE.state
 
 
-async def retry_pending_upload(grace_minutes: int = DEFAULT_UPLOAD_GRACE_MINUTES,
-                                retry_seconds: int = DEFAULT_UPLOAD_RETRY_SECONDS) -> BackupState:
-    """Retries the upload for the CURRENT local preserved file - never creates a new backup just to
-    retry the upload (see requirement: never re-upload/re-backup unnecessarily on retry)."""
+async def retry_pending_upload() -> BackupState:
+    """Retries the sync-folder placement for the CURRENT local preserved file - never creates a new backup
+    just to retry the copy."""
     if STORE.lock.locked():
         return STORE.state
     if not STORE.state.local_backup_path or STORE.state.status not in ("upload_failed_local_preserved", "failed"):
         return STORE.state
     async with STORE.lock:
         STORE.state.status = "running"
+        STORE.state.phase = "placing_in_sync_folder"
         STORE.save()
-        await _upload_with_grace_period(Path(STORE.state.local_backup_path), grace_minutes, retry_seconds)
+        await _place_in_sync_folder_with_retries(Path(STORE.state.local_backup_path))
     return STORE.state
 
 
@@ -493,7 +559,7 @@ async def daily_backup_scheduler():
     run_backup_cycle() the shutdown signal calls, so whichever fires first (this timer, or an evening
     shutdown) does the real work and the other is a same-day no-op."""
     while True:
-        now = datetime.now()
+        now = now_kolkata()
         target = now.replace(hour=DAILY_BACKUP_HOUR, minute=DAILY_BACKUP_MINUTE, second=0, microsecond=0)
         if target <= now:
             target = target + timedelta(days=1)
@@ -511,9 +577,11 @@ async def daily_backup_scheduler():
 def list_local_backups() -> list[dict]:
     _ensure_dirs()
     out = []
-    for f in sorted(LOCAL_DIR.glob("feehub-backup-*.enc"), reverse=True):
-        out.append({"filename": f.name, "path": str(f), "size": f.stat().st_size,
-                    "modified": datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat()})
+    files = list(LOCAL_DIR.glob(f"{BACKUP_FILE_PREFIX}*.enc")) + list(LOCAL_DIR.glob("feehub-backup-*.enc"))
+    for f in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True):
+        out.append({"filename": f.name, "size": f.stat().st_size,
+                    "modified": datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat(),
+                    "legacy": not f.name.startswith(BACKUP_FILE_PREFIX)})
     return out
 
 
@@ -542,6 +610,7 @@ def verify_backup_file(encrypted_path: Path, scratch_dir: Path) -> tuple[bool, s
             bson_count = sum(1 for n in names if n.endswith(".bson"))
             if bson_count == 0:
                 return False, "Decrypted archive contains no .bson files."
-            return True, f"Verified: {len(names)} files, {bson_count} collections, decrypts and unzips cleanly."
+            coll = sorted(n[:-len(".bson")] for n in names if n.endswith(".bson"))
+            return True, f"Verified: {bson_count} collections ({', '.join(coll)}), decrypts and unzips cleanly."
     finally:
         shutil.rmtree(scratch_dir, ignore_errors=True)
