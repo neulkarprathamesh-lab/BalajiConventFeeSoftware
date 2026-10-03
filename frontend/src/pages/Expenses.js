@@ -7,6 +7,7 @@ import { Wallet, Plus, Search, Ban, Settings2, Fuel, X, BarChart3, Pencil } from
 import { queueOperation } from '@/lib/syncEngine';
 import useLiveRefresh from '@/lib/useLiveRefresh';
 import { busOptions } from '@/lib/busOptions';
+import { formatAddedOn } from '@/lib/dateTime';
 
 // Same offline-safe pattern as NewReceipt.js: the ONLINE path is completely
 // unchanged; only a genuine network failure (server unreachable) queues the
@@ -38,7 +39,7 @@ const CAN_VOID = ['administrator', 'manager'];
 const emptyForm = {
   date: new Date().toISOString().slice(0, 10), category: '', description: '',
   to_whom: '', who_brought_bill: '', amount: '', payment_mode: 'cash', cheque_no: '',
-  bus_route_id: '', session: '', fuel_type: '', quantity_litres: '', rate_per_litre: '', odometer_km: '', invoice_no: '', remarks: '',
+  bus_route_id: '', fuel_type: 'Diesel', quantity_litres: '', rate_per_litre: '', odometer_km: '', invoice_no: '', remarks: '',
   custom_expense_name: '',
 };
 
@@ -124,8 +125,8 @@ export default function Expenses() {
       };
       if (isFuel) {
         Object.assign(body, {
-          bus_route_id: form.bus_route_id || null, session: form.session || null,
-          fuel_type: form.fuel_type || null,
+          bus_route_id: form.bus_route_id || null,
+          fuel_type: form.fuel_type || 'Diesel',
           quantity_litres: form.quantity_litres ? Number(form.quantity_litres) : null,
           rate_per_litre: form.rate_per_litre ? Number(form.rate_per_litre) : null,
           odometer_km: form.odometer_km !== '' ? Number(form.odometer_km) : null,
@@ -153,7 +154,7 @@ export default function Expenses() {
       date: r.date, category: r.category, description: r.description,
       to_whom: r.to_whom, who_brought_bill: r.who_brought_bill, amount: r.amount,
       payment_mode: r.payment_mode, cheque_no: r.cheque_no || '',
-      bus_route_id: r.bus_route_id || '', session: r.session || '', fuel_type: r.fuel_type || '',
+      bus_route_id: r.bus_route_id || '', fuel_type: r.fuel_type || 'Diesel',
       quantity_litres: r.quantity_litres ?? '', rate_per_litre: r.rate_per_litre ?? '',
       odometer_km: r.odometer_km ?? '', invoice_no: r.invoice_no || '',
       remarks: r.remarks || '', custom_expense_name: r.custom_expense_name || '',
@@ -220,7 +221,6 @@ export default function Expenses() {
               </select>
               <select data-testid="exp-report-fuel" value={fFuelType} onChange={e => setFFuelType(e.target.value)} className="h-9 px-2 border border-slate-300 rounded bg-white">
                 <option value="">All fuel types</option>
-                <option value="Petrol">Petrol</option>
                 <option value="Diesel">Diesel</option>
               </select>
               <input data-testid="exp-report-vendor" value={fVendor} onChange={e => setFVendor(e.target.value)} placeholder="Vendor / fuel station" className="h-9 px-2 border border-slate-300 rounded" />
@@ -313,18 +313,11 @@ export default function Expenses() {
                     </select>
                     {busRoutes.length === 0 && <div className="text-[11px] text-slate-400 mt-1">No buses in Bus Master yet</div>}
                   </Field>
-                  <Field label="Session">
-                    <select value={form.session} onChange={e => set('session', e.target.value)} className="w-full h-10 px-3 border border-slate-300 rounded bg-white">
-                      <option value="">Select…</option>
-                      <option value="Morning">Morning</option>
-                      <option value="Afternoon">Afternoon</option>
-                    </select>
-                  </Field>
                   <Field label="Fuel Type">
                     <select data-testid="exp-fuel-type" value={form.fuel_type} onChange={e => set('fuel_type', e.target.value)} className="w-full h-10 px-3 border border-slate-300 rounded bg-white">
                       <option value="">Select…</option>
-                      <option value="Petrol">Petrol</option>
                       <option value="Diesel">Diesel</option>
+                      {form.fuel_type === 'Petrol' && <option value="Petrol">Petrol (historical)</option>}
                     </select>
                   </Field>
                   <Field label="Quantity (Litres)">
@@ -379,7 +372,7 @@ export default function Expenses() {
           <table className="w-full text-[13px]">
             <thead>
               <tr className="text-left text-[10px] uppercase text-slate-500 border-b border-slate-200 bg-slate-50">
-                <th className="py-2 px-3">Expense No.</th><th className="px-3">Date</th><th className="px-3">Category</th>
+                <th className="py-2 px-3">Expense No.</th><th className="px-3">Date</th><th className="px-3">Added On</th><th className="px-3">Category</th>
                 <th className="px-3">Description</th><th className="px-3">To Whom</th><th className="px-3">Brought By</th>
                 <th className="px-3">Mode</th><th className="px-3 text-right">Amount</th><th className="px-3">Status</th><th className="px-3"></th>
               </tr>
@@ -389,6 +382,7 @@ export default function Expenses() {
                 <tr key={r.id} className={`border-b border-slate-100 ${r.status === 'void' ? 'opacity-50' : ''}`}>
                   <td className="py-2 px-3 font-mono">{r.expense_no}</td>
                   <td className="px-3">{r.date}</td>
+                  <td className="px-3 text-[12px] text-slate-600 whitespace-nowrap" data-testid="exp-added-on">{formatAddedOn(r.created_at)}</td>
                   <td className="px-3">{r.category_display || r.category}{r.category === FUEL_CATEGORY && r.bus_no ? ` (${r.bus_no})` : ''}</td>
                   <td className="px-3">{r.description}</td>
                   <td className="px-3">{r.to_whom}</td>

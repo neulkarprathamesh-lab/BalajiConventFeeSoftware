@@ -106,7 +106,7 @@ def _fuel_number(value, label: str) -> Optional[float]:
         raise HTTPException(400, f"{label} must be a number")
 
 
-def _validate_expense_body(body: Dict[str, Any]) -> Dict[str, Any]:
+def _validate_expense_body(body: Dict[str, Any], existing_fuel_type: Optional[str] = None) -> Dict[str, Any]:
     category = str(body.get("category") or "").strip()
     description = str(body.get("description") or "").strip()
     to_whom = str(body.get("to_whom") or "").strip()
@@ -168,7 +168,7 @@ def _validate_expense_body(body: Dict[str, Any]) -> Dict[str, Any]:
         "to_whom": to_whom, "who_brought_bill": who_brought_bill,
         "amount": amount, "payment_mode": payment_mode, "cheque_no": cheque_no,
         "remarks": (str(body.get("remarks")).strip() or None) if body.get("remarks") else None,
-        "bus_route_id": None, "bus_no": None, "session": None,
+        "bus_route_id": None, "bus_no": None,
         "fuel_type": None, "quantity_litres": None, "rate_per_litre": None,
         "odometer_km": None, "invoice_no": None,
     }
@@ -176,14 +176,16 @@ def _validate_expense_body(body: Dict[str, Any]) -> Dict[str, Any]:
     # Petrol/Diesel special handling — only relevant when the category matches;
     # never required/shown for any other category.
     if category == FUEL_CATEGORY:
-        session = str(body.get("session") or "").strip() or None
-        fuel_type = str(body.get("fuel_type") or "").strip() or None
-        if fuel_type not in ("Petrol", "Diesel"):
-            raise HTTPException(400, "fuel_type must be 'Petrol' or 'Diesel'")
+        # All school buses run on Diesel. A historical Petrol record keeps its value only
+        # when it is edited without changing the fuel type.
+        fuel_type = str(body.get("fuel_type") or "").strip() or "Diesel"
+        allowed = {"Diesel"} | ({existing_fuel_type} if existing_fuel_type else set())
+        if fuel_type not in allowed:
+            raise HTTPException(400, "Bus fuel is recorded as Diesel")
         if not body.get("bus_route_id"):
             raise HTTPException(400, "Bus is required for fuel expenses")
         doc.update({
-            "bus_route_id": body.get("bus_route_id") or None, "session": session, "fuel_type": fuel_type,
+            "bus_route_id": body.get("bus_route_id") or None, "fuel_type": fuel_type,
             "quantity_litres": qty, "rate_per_litre": rate, "odometer_km": odometer,
             "invoice_no": str(body.get("invoice_no") or "").strip() or None,
         })
@@ -224,7 +226,7 @@ _EXPENSE_ALTER_FIELDS = {
     "odometer_km", "invoice_no",
     "date", "category", "custom_expense_name", "description", "to_whom", "who_brought_bill",
     "amount", "payment_mode", "cheque_no", "remarks",
-    "bus_route_id", "session", "fuel_type", "quantity_litres", "rate_per_litre",
+    "bus_route_id", "fuel_type", "quantity_litres", "rate_per_litre",
 }
 
 
@@ -244,7 +246,7 @@ async def alter_expense(eid: str, body: Dict[str, Any], user=Depends(require_rol
     if not incoming:
         raise HTTPException(400, "Nothing to update")
     merged = {**existing, **incoming}
-    doc = _validate_expense_body(merged)
+    doc = _validate_expense_body(merged, existing_fuel_type=existing.get("fuel_type"))
     doc["bus_no"] = await _resolve_bus_no(doc)
 
     before_snapshot = {k: existing.get(k) for k in doc.keys()}
