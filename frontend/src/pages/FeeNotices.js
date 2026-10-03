@@ -19,6 +19,7 @@ export default function FeeNotices() {
   const [data, setData] = useState(null);
   const [selected, setSelected] = useState({});
   const [lang, setLang] = useState('en');
+  const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
     api.get('/departments').then(r => setDepts(r.data));
@@ -52,9 +53,14 @@ export default function FeeNotices() {
               <button data-testid="fn-lang-mr" onClick={()=>setLang('mr')} className={`h-9 px-3 text-xs ${lang==='mr' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700'}`}>मराठी</button>
             </div>
             {data && data.students.length > 0 && (
-              <button data-testid="fn-print" onClick={()=>window.print()} className="h-9 px-3 bg-blue-600 text-white text-sm rounded flex items-center gap-1.5 hover:bg-blue-700">
-                <Printer className="w-4 h-4" /> Print {selectedCount} Notice{selectedCount===1?'':'s'}
-              </button>
+              <>
+                <button data-testid="fn-preview" onClick={()=>setShowPreview(true)} disabled={selectedCount===0} className="h-9 px-3 border border-slate-300 text-slate-800 bg-white text-sm rounded flex items-center gap-1.5 hover:bg-slate-50 disabled:opacity-50">
+                  Preview {selectedCount} Notice{selectedCount===1?'':'s'}
+                </button>
+                <button data-testid="fn-print" onClick={()=>window.print()} className="h-9 px-3 bg-blue-600 text-white text-sm rounded flex items-center gap-1.5 hover:bg-blue-700">
+                  <Printer className="w-4 h-4" /> Print {selectedCount} Notice{selectedCount===1?'':'s'}
+                </button>
+              </>
             )}
           </div>
         }
@@ -104,6 +110,31 @@ export default function FeeNotices() {
             <div className="hidden print:block space-y-0" data-testid="fn-print-area">
               {data.students.filter(s => selected[s.student_id]).map(s => <Notice key={s.student_id} s={s} lang={lang} />)}
             </div>
+
+            {showPreview && (
+              <div className="no-print fixed inset-0 z-50 bg-slate-900/60 flex items-start justify-center p-4 overflow-y-auto" data-testid="fn-preview-modal">
+                <div className="bg-white rounded-lg shadow-2xl w-full max-w-4xl">
+                  <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between gap-3">
+                    <div className="text-sm text-slate-800">
+                      <b>What will print:</b> {selectedCount} notice{selectedCount===1?'':'s'} · {lang === 'mr' ? 'मराठी' : 'English'} · one page per student
+                    </div>
+                    <div className="flex gap-2">
+                      <button data-testid="fn-preview-print" onClick={()=>{ setShowPreview(false); setTimeout(()=>window.print(), 150); }} className="h-9 px-3 bg-blue-600 text-white text-sm rounded flex items-center gap-1.5 hover:bg-blue-700">
+                        <Printer className="w-4 h-4" /> Print now
+                      </button>
+                      <button data-testid="fn-preview-close" onClick={()=>setShowPreview(false)} className="h-9 px-3 border border-slate-300 text-sm rounded hover:bg-slate-50">Close</button>
+                    </div>
+                  </div>
+                  <div className="p-5 bg-slate-100 space-y-6 max-h-[75vh] overflow-y-auto">
+                    {data.students.filter(s => selected[s.student_id]).map(s => (
+                      <div key={s.student_id} className="bg-white shadow mx-auto">
+                        <Notice s={s} lang={lang} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Preview */}
             {selectedCount > 0 && (
