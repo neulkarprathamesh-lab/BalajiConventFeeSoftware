@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { sortClasses } from '@/lib/classOptions';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
 import { useAuth } from '@/context/AuthContext';
@@ -169,7 +170,7 @@ export default function LiveFeeUpdate() {
           <Field label="Class">
             <select value={classId} onChange={e => setClassId(e.target.value)} className="h-9 px-2 border border-slate-300 rounded text-sm">
               <option value="">All</option>
-              {classes.filter(c => !['Fisheries', 'Electronics'].includes(c.stream)).map(c => <option key={c.id} value={c.id}>{c.name}{c.medium ? ` · ${c.medium}` : ''}{c.stream ? ` · ${c.stream}` : ''}</option>)}
+              {sortClasses(classes).filter(c => !['Fisheries', 'Electronics'].includes(c.stream)).map(c => <option key={c.id} value={c.id}>{c.name}{c.medium ? ` · ${c.medium}` : ''}{c.stream ? ` · ${c.stream}` : ''}</option>)}
             </select>
           </Field>
           <Field label="Section"><input value={section} onChange={e => setSection(e.target.value)} className="h-9 px-2 border border-slate-300 rounded text-sm w-20" /></Field>
@@ -294,7 +295,7 @@ function RequestAccessModal({ classes, deviceId, onClose, onSubmitted }) {
           <Field label="Class">
             <select value={classId} onChange={e => setClassId(e.target.value)} required className="w-full h-10 px-2 border border-slate-300 rounded text-sm bg-white" data-testid="fea-class">
               <option value="">Select class</option>
-              {classes.filter(c => !['Fisheries', 'Electronics'].includes(c.stream)).map(c => <option key={c.id} value={c.id}>{c.name}{c.medium ? ` · ${c.medium}` : ''}{c.stream ? ` · ${c.stream}` : ''}</option>)}
+              {sortClasses(classes).filter(c => !['Fisheries', 'Electronics'].includes(c.stream)).map(c => <option key={c.id} value={c.id}>{c.name}{c.medium ? ` · ${c.medium}` : ''}{c.stream ? ` · ${c.stream}` : ''}</option>)}
             </select>
           </Field>
           <Field label="Medium (optional)">

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { buildClassOptions, compareClasses } from '@/lib/classOptions';
 import api from '@/lib/api';
 import { PageHeader } from '@/components/Layout';
 import { Search, Plus, X, Upload } from 'lucide-react';
@@ -277,7 +278,7 @@ function NewStudent({ depts, classes, onClose }) {
 
   const isJC = depts.find(d => d.id === f.department_id)?.code === 'JC';
   const availClasses = classes.filter(c => c.department_id === f.department_id);
-  const jcClassNames = [...new Set(availClasses.map(c => c.name))].sort();
+  const jcClassNames = [...new Set(availClasses.map(c => c.name))].sort((a, b) => compareClasses({ name: a }, { name: b }));
   const resolvedJcClassId = isJC ? (availClasses.find(c => c.name === jcClassName && c.stream === stream)?.id || '') : '';
 
   useEffect(() => { setJcClassName(''); setStream(''); setFirstYearInCollege(false); setFeePreview(null); }, [f.department_id]);
@@ -325,7 +326,7 @@ function NewStudent({ depts, classes, onClose }) {
           {isJC ? (
             <Field label="Class *"><select required data-testid="ns-class" className={inp} value={jcClassName} onChange={e=>setJcClassName(e.target.value)}><option value="">Select…</option>{jcClassNames.map(n => <option key={n} value={n}>{n}</option>)}</select></Field>
           ) : (
-            <Field label="Class *"><select required data-testid="ns-class" className={inp} value={f.class_id} onChange={e=>set('class_id', e.target.value)}><option value="">Select…</option>{availClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
+            <Field label="Class *"><select required data-testid="ns-class" className={inp} value={f.class_id} onChange={e=>set('class_id', e.target.value)}><option value="">Select…</option>{buildClassOptions(classes, f.department_id).map(o => <option key={o.id} value={o.id}>{o.label}</option>)}</select></Field>
           )}
           {isJC && jcClassName && (
             <Field label="Stream *"><select required data-testid="ns-stream" className={inp} value={stream} onChange={e=>setStream(e.target.value)}><option value="">Select…</option>{JC_STREAMS.map(s => <option key={s} value={s}>{s}</option>)}</select></Field>

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { sortClasses } from '@/lib/classOptions';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
@@ -603,9 +604,8 @@ function EditProfileModal({ studentId, student, onClose, onSaved }) {
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
   const classLabel = (c) => `${c.name}${c.stream ? ' · ' + c.stream : ''}${c.medium ? ' · ' + c.medium : ''}`;
-  const availableClasses = classes
-    .filter(c => !LEGACY_STREAMS.includes(c.stream) || c.id === student.class_id)
-    .sort((a, b) => classLabel(a).localeCompare(classLabel(b)));
+  const availableClasses = sortClasses(classes
+    .filter(c => !LEGACY_STREAMS.includes(c.stream) || c.id === student.class_id));
 
   const save = async (e) => {
     e.preventDefault();

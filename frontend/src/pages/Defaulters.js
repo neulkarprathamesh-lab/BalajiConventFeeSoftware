@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { buildClassOptions } from '@/lib/classOptions';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
 import { Printer, AlertTriangle } from 'lucide-react';
@@ -24,7 +25,7 @@ export default function Defaulters() {
   };
   useEffect(() => { run(); /* eslint-disable-next-line */ }, [quarter, dept, cls]);
 
-  const availClasses = classes.filter(c => !dept || c.department_id === dept);
+  const availClasses = buildClassOptions(classes, dept);
 
   return (
     <>
@@ -51,7 +52,7 @@ export default function Defaulters() {
           </div>
           <div>
             <div className="text-[11px] uppercase tracking-wide text-slate-600 mb-1">Class</div>
-            <select value={cls} onChange={e=>setCls(e.target.value)} className="h-9 px-3 border border-slate-300 rounded text-sm bg-white"><option value="">All</option>{availClasses.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
+            <select value={cls} onChange={e=>setCls(e.target.value)} className="h-9 px-3 border border-slate-300 rounded text-sm bg-white"><option value="">All</option>{availClasses.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select>
           </div>
         </div>
 

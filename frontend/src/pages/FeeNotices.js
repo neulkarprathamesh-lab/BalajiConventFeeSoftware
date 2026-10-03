@@ -3,6 +3,7 @@ import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
 import { Printer, FileText, Languages } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { buildClassOptions } from '@/lib/classOptions';
 
 const NT = {
   en: { title: 'OUTSTANDING FEE NOTICE', date: 'Date', student: 'Student', admNo: 'Admission No', class: 'Class', guardian: 'Guardian', contact: 'Contact', intro: 'Dear Parent / Guardian, our records show the following pending fee for your ward. Kindly clear it at the school fee counter at the earliest.', particulars: 'Particulars', amount: 'Amount', academic: 'Academic Fee (Annual)', busFee: 'Bus Fee', months: 'months', total: 'Total Annual Fee', less: 'Less: Amount Paid', concession: 'Less: Concession / Adjustment', addRefund: 'Add: Refunded', outstanding: 'Amount Outstanding', footer: 'Fee counter timing: 9:00 AM – 3:00 PM (Mon–Sat). Modes accepted: Cash / Cheque / DD / UPI / NEFT.', ack: 'Acknowledgement / Return Slip', received: 'Received on', parentSign: "Parent / Guardian Signature", teacher: 'Class Teacher', scanForLedger: 'Scan for ledger' },
@@ -24,7 +25,7 @@ export default function FeeNotices() {
     api.get('/classes').then(r => setClasses(r.data));
   }, []);
 
-  const availClasses = classes.filter(c => c.department_id === dept);
+  const availClasses = buildClassOptions(classes, dept);
   const run = async () => {
     const p = new URLSearchParams();
     if (dept) p.set('department_id', dept);
@@ -64,7 +65,7 @@ export default function FeeNotices() {
             <select value={dept} onChange={e=>{setDept(e.target.value); setCls('');}} className="h-9 px-3 border border-slate-300 rounded text-sm bg-white"><option value="">All</option>{depts.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</select>
           </div>
           <div><div className="text-[11px] uppercase tracking-wide text-slate-600 mb-1">Class</div>
-            <select value={cls} onChange={e=>setCls(e.target.value)} className="h-9 px-3 border border-slate-300 rounded text-sm bg-white"><option value="">All</option>{availClasses.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
+            <select value={cls} onChange={e=>setCls(e.target.value)} className="h-9 px-3 border border-slate-300 rounded text-sm bg-white"><option value="">All</option>{availClasses.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select>
           </div>
           <div><div className="text-[11px] uppercase tracking-wide text-slate-600 mb-1">Min Outstanding (₹)</div>
             <input type="number" value={minAmount} onChange={e=>setMinAmount(e.target.value)} className="h-9 w-28 px-3 border border-slate-300 rounded text-sm" />

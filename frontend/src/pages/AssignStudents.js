@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { sortClasses } from '@/lib/classOptions';
 import api from '@/lib/api';
 import { PageHeader } from '@/components/Layout';
 import { toast } from 'sonner';
@@ -50,8 +51,8 @@ export default function AssignStudents() {
   // Legacy stream names are never a valid NEW selection - see Promotion.js
   // for the same rule. Underlying documents are left alone.
   const LEGACY_STREAMS = ['Fisheries', 'Electronics'];
-  const availFromClasses = classes.filter(c => (!fromDept || c.department_id === fromDept) && !LEGACY_STREAMS.includes(c.stream));
-  const availTargetClasses = classes.filter(c => !LEGACY_STREAMS.includes(c.stream));
+  const availFromClasses = sortClasses(classes.filter(c => (!fromDept || c.department_id === fromDept) && !LEGACY_STREAMS.includes(c.stream)));
+  const availTargetClasses = sortClasses(classes.filter(c => !LEGACY_STREAMS.includes(c.stream)));
   const targetClass = classes.find(c => c.id === toClass);
   const availTargetFs = structures.filter(s => s.class_id === toClass);
   const selectedIds = Object.keys(selected).filter(id => selected[id]);

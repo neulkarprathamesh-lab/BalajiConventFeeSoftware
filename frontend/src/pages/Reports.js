@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { sortClasses } from '@/lib/classOptions';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
 import { useAuth } from '@/context/AuthContext';
@@ -202,7 +203,7 @@ function StudentFeeBalanceReport() {
         <div><div className="text-[11px] uppercase tracking-wide text-slate-600 mb-1">Class</div>
           <select data-testid="sfb-class" value={classId} onChange={e=>setClassId(e.target.value)} className="h-9 px-2 border border-slate-300 rounded text-sm bg-white">
             <option value="">All Classes</option>
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name}{c.medium ? ` · ${c.medium}` : ''}{c.stream ? ` · ${c.stream}` : ''}</option>)}
+            {sortClasses(classes).map(c => <option key={c.id} value={c.id}>{c.name}{c.medium ? ` · ${c.medium}` : ''}{c.stream ? ` · ${c.stream}` : ''}</option>)}
           </select>
         </div>
         <div><div className="text-[11px] uppercase tracking-wide text-slate-600 mb-1">Section</div><input value={section} onChange={e=>setSection(e.target.value)} className="h-9 px-2 border border-slate-300 rounded text-sm w-20" /></div>
