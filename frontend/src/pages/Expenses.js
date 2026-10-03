@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Wallet, Plus, Search, Ban, Settings2, Fuel, X, BarChart3, Pencil } from 'lucide-react';
 import { queueOperation } from '@/lib/syncEngine';
 import useLiveRefresh from '@/lib/useLiveRefresh';
+import { busOptions } from '@/lib/busOptions';
 
 // Same offline-safe pattern as NewReceipt.js: the ONLINE path is completely
 // unchanged; only a genuine network failure (server unreachable) queues the
@@ -37,7 +38,7 @@ const CAN_VOID = ['administrator', 'manager'];
 const emptyForm = {
   date: new Date().toISOString().slice(0, 10), category: '', description: '',
   to_whom: '', who_brought_bill: '', amount: '', payment_mode: 'cash', cheque_no: '',
-  bus_route_id: '', session: '', fuel_type: '', quantity_litres: '', rate_per_litre: '', remarks: '',
+  bus_route_id: '', session: '', fuel_type: '', quantity_litres: '', rate_per_litre: '', odometer_km: '', invoice_no: '', remarks: '',
   custom_expense_name: '',
 };
 
@@ -63,6 +64,9 @@ export default function Expenses() {
   const [fMode, setFMode] = useState('');
   const [fFrom, setFFrom] = useState('');
   const [fTo, setFTo] = useState('');
+  const [fBus, setFBus] = useState('');
+  const [fFuelType, setFFuelType] = useState('');
+  const [fVendor, setFVendor] = useState('');
 
   const loadCategories = () => api.get('/expense-categories').then(r => setCategories(r.data || []));
   const loadBusRoutes = () => api.get('/bus-routes').then(r => setBusRoutes(r.data || [])).catch(() => setBusRoutes([]));
@@ -76,12 +80,15 @@ export default function Expenses() {
     return api.get('/expenses', { params }).then(r => setRows(r.data || []));
   };
 
-  const loadFuelReport = () => api.get('/reports/expenses/bus-fuel', { params: { date_from: fFrom || undefined, date_to: fTo || undefined } }).then(r => setFuelReport(r.data));
+  const loadFuelReport = () => api.get('/reports/expenses/bus-fuel', { params: {
+    date_from: fFrom || undefined, date_to: fTo || undefined, bus_route_id: fBus || undefined,
+    fuel_type: fFuelType || undefined, vendor: fVendor || undefined,
+  } }).then(r => setFuelReport(r.data));
 
   useEffect(() => { loadCategories(); loadBusRoutes(); load(); /* eslint-disable-next-line */ }, []);
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, fCategory, fMode, fFrom, fTo]);
   useLiveRefresh(load, 10000);
-  useEffect(() => { if (showFuelReport) loadFuelReport(); /* eslint-disable-next-line */ }, [showFuelReport, fFrom, fTo]);
+  useEffect(() => { if (showFuelReport) loadFuelReport(); /* eslint-disable-next-line */ }, [showFuelReport, fFrom, fTo, fBus, fFuelType, fVendor]);
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
   const isFuel = form.category === FUEL_CATEGORY;
@@ -110,7 +117,7 @@ export default function Expenses() {
       const body = {
         date: form.date, category: form.category, description: form.description.trim(),
         to_whom: form.to_whom.trim(), who_brought_bill: form.who_brought_bill.trim(),
-        amount: Number(form.amount), payment_mode: form.payment_mode,
+        amount: isFuel && computedFromQtyRate != null ? computedFromQtyRate : Number(form.amount), payment_mode: form.payment_mode,
         cheque_no: isChequeMode ? form.cheque_no.trim() : null,
         remarks: form.remarks.trim() || null,
         custom_expense_name: isOther ? form.custom_expense_name.trim() : null,
@@ -121,6 +128,8 @@ export default function Expenses() {
           fuel_type: form.fuel_type || null,
           quantity_litres: form.quantity_litres ? Number(form.quantity_litres) : null,
           rate_per_litre: form.rate_per_litre ? Number(form.rate_per_litre) : null,
+          odometer_km: form.odometer_km !== '' ? Number(form.odometer_km) : null,
+          invoice_no: form.invoice_no.trim() || null,
         });
       }
       if (editingId) {
@@ -146,6 +155,7 @@ export default function Expenses() {
       payment_mode: r.payment_mode, cheque_no: r.cheque_no || '',
       bus_route_id: r.bus_route_id || '', session: r.session || '', fuel_type: r.fuel_type || '',
       quantity_litres: r.quantity_litres ?? '', rate_per_litre: r.rate_per_litre ?? '',
+      odometer_km: r.odometer_km ?? '', invoice_no: r.invoice_no || '',
       remarks: r.remarks || '', custom_expense_name: r.custom_expense_name || '',
     });
     setEditingId(r.id); setShowForm(true);
@@ -203,12 +213,31 @@ export default function Expenses() {
               <div className="text-[11px] uppercase tracking-widest text-amber-800 font-bold flex items-center gap-1.5"><Fuel className="w-3.5 h-3.5" /> Bus-wise Fuel Expense (uses the date range above)</div>
               <button onClick={() => setShowFuelReport(false)}><X className="w-4 h-4 text-slate-400" /></button>
             </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3 text-[12px]">
+              <select data-testid="exp-report-bus" value={fBus} onChange={e => setFBus(e.target.value)} className="h-9 px-2 border border-slate-300 rounded bg-white">
+                <option value="">All buses</option>
+                {busOptions(busRoutes).map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </select>
+              <select data-testid="exp-report-fuel" value={fFuelType} onChange={e => setFFuelType(e.target.value)} className="h-9 px-2 border border-slate-300 rounded bg-white">
+                <option value="">All fuel types</option>
+                <option value="Petrol">Petrol</option>
+                <option value="Diesel">Diesel</option>
+              </select>
+              <input data-testid="exp-report-vendor" value={fVendor} onChange={e => setFVendor(e.target.value)} placeholder="Vendor / fuel station" className="h-9 px-2 border border-slate-300 rounded" />
+              <div className="col-span-2 md:col-span-2 text-[11px] text-slate-500 flex items-center">Date range: use the From / To filters above.</div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3" data-testid="exp-report-summary">
+              <div className="border border-amber-200 rounded p-2"><div className="text-[10px] uppercase text-slate-500">Total fuel quantity</div><div className="font-mono font-semibold">{fuelReport.grand_total_litres} L</div></div>
+              <div className="border border-amber-200 rounded p-2"><div className="text-[10px] uppercase text-slate-500">Total fuel expense</div><div className="font-mono font-semibold">{inr(fuelReport.grand_total_amount)}</div></div>
+              <div className="border border-amber-200 rounded p-2"><div className="text-[10px] uppercase text-slate-500">Average rate / litre</div><div className="font-mono font-semibold">{fuelReport.grand_average_rate != null ? inr(fuelReport.grand_average_rate) : '—'}</div></div>
+              <div className="border border-amber-200 rounded p-2"><div className="text-[10px] uppercase text-slate-500">Fuel entries</div><div className="font-mono font-semibold">{fuelReport.grand_entries}</div></div>
+            </div>
             <table className="w-full text-[12.5px] mb-3">
-              <thead><tr className="text-left text-[10px] uppercase text-slate-500 border-b"><th className="py-1">Bus No.</th><th className="text-right">Entries</th><th className="text-right">Total Litres</th><th className="text-right">Avg Rate/Litre</th><th className="text-right">Total Amount</th></tr></thead>
+              <thead><tr className="text-left text-[10px] uppercase text-slate-500 border-b"><th className="py-1">Bus</th><th className="text-right">Entries</th><th className="text-right">Litres</th><th className="text-right">Average Rate</th><th className="text-right">Fuel Cost</th></tr></thead>
               <tbody>
                 {fuelReport.by_bus.map((b, i) => (
                   <tr key={i} className="border-b border-slate-100">
-                    <td className="py-1">{b.bus_no || '(unassigned)'}</td>
+                    <td className="py-1">{b.bus_short ? `${b.bus_short} — ${b.bus_no}` : (b.bus_no || '(unassigned)')}</td>
                     <td className="text-right">{b.entries}</td>
                     <td className="text-right font-mono">{b.total_litres}</td>
                     <td className="text-right font-mono">{b.average_rate_per_litre != null ? inr(b.average_rate_per_litre) : '—'}</td>
@@ -280,7 +309,7 @@ export default function Expenses() {
                   <Field label="Bus No.">
                     <select data-testid="exp-bus" value={form.bus_route_id} onChange={e => set('bus_route_id', e.target.value)} className="w-full h-10 px-3 border border-slate-300 rounded bg-white">
                       <option value="">Select bus…</option>
-                      {busRoutes.map(b => <option key={b.id} value={b.id}>{b.vehicle_no || b.code} — {b.name}</option>)}
+                      {busOptions(busRoutes).map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
                     </select>
                     {busRoutes.length === 0 && <div className="text-[11px] text-slate-400 mt-1">No buses in Bus Master yet</div>}
                   </Field>
@@ -303,6 +332,12 @@ export default function Expenses() {
                   </Field>
                   <Field label="Rate per Litre (₹)">
                     <input type="number" min="0" step="0.01" value={form.rate_per_litre} onChange={e => set('rate_per_litre', e.target.value)} className="w-full h-10 px-3 border border-slate-300 rounded text-right font-mono" />
+                  </Field>
+                  <Field label="Odometer Reading (km)">
+                    <input data-testid="exp-odometer" type="number" min="0" step="1" value={form.odometer_km} onChange={e => set('odometer_km', e.target.value)} className="w-full h-10 px-3 border border-slate-300 rounded text-right font-mono" />
+                  </Field>
+                  <Field label="Bill / Invoice No.">
+                    <input data-testid="exp-invoice" type="text" value={form.invoice_no} onChange={e => set('invoice_no', e.target.value)} className="w-full h-10 px-3 border border-slate-300 rounded font-mono" />
                   </Field>
                   {computedFromQtyRate != null && (
                     <div className="col-span-2 flex items-end">

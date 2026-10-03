@@ -15,6 +15,7 @@ import re
 from datetime import date as _date
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Depends
+from bus_registry import fuel_total, validate_fuel_numbers, short_identifier
 from core import (
     db, audit, gen_id, get_current_user, require_roles, now_iso,
     next_expense_number, next_bill_number,
@@ -96,6 +97,15 @@ async def update_expense_category(cid: str, body: Dict[str, Any], user=Depends(r
 # ============================================================================
 # Expenses
 # ============================================================================
+def _fuel_number(value, label: str) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"{label} must be a number")
+
+
 def _validate_expense_body(body: Dict[str, Any]) -> Dict[str, Any]:
     category = str(body.get("category") or "").strip()
     description = str(body.get("description") or "").strip()
@@ -112,10 +122,21 @@ def _validate_expense_body(body: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(400, "'To Whom' is required")
     if not who_brought_bill:
         raise HTTPException(400, "'Who Brought the Bill' is required")
-    try:
-        amount = float(body.get("amount"))
-    except (TypeError, ValueError):
-        raise HTTPException(400, "Amount must be a number")
+    if category == FUEL_CATEGORY:
+        # Fuel total is always Litres x Rate per Litre - never a separately typed amount.
+        qty = _fuel_number(body.get("quantity_litres"), "Quantity (litres)")
+        rate = _fuel_number(body.get("rate_per_litre"), "Rate per litre")
+        odometer = _fuel_number(body.get("odometer_km"), "Odometer reading")
+        try:
+            validate_fuel_numbers(qty, rate, odometer)
+        except ValueError as ex:
+            raise HTTPException(400, str(ex))
+        amount = fuel_total(qty, rate)
+    else:
+        try:
+            amount = float(body.get("amount"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Amount must be a number")
     if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
     if payment_mode not in PAYMENT_MODES:
@@ -149,35 +170,23 @@ def _validate_expense_body(body: Dict[str, Any]) -> Dict[str, Any]:
         "remarks": (str(body.get("remarks")).strip() or None) if body.get("remarks") else None,
         "bus_route_id": None, "bus_no": None, "session": None,
         "fuel_type": None, "quantity_litres": None, "rate_per_litre": None,
+        "odometer_km": None, "invoice_no": None,
     }
 
     # Petrol/Diesel special handling — only relevant when the category matches;
     # never required/shown for any other category.
     if category == FUEL_CATEGORY:
-        bus_route_id = body.get("bus_route_id")
         session = str(body.get("session") or "").strip() or None
         fuel_type = str(body.get("fuel_type") or "").strip() or None
-        if fuel_type and fuel_type not in ("Petrol", "Diesel"):
+        if fuel_type not in ("Petrol", "Diesel"):
             raise HTTPException(400, "fuel_type must be 'Petrol' or 'Diesel'")
-        qty = body.get("quantity_litres")
-        rate = body.get("rate_per_litre")
-        try:
-            qty = float(qty) if qty not in (None, "") else None
-            rate = float(rate) if rate not in (None, "") else None
-        except (TypeError, ValueError):
-            raise HTTPException(400, "Quantity and Rate per Litre must be numbers")
+        if not body.get("bus_route_id"):
+            raise HTTPException(400, "Bus is required for fuel expenses")
         doc.update({
-            "bus_route_id": bus_route_id, "session": session, "fuel_type": fuel_type,
-            "quantity_litres": qty, "rate_per_litre": rate,
+            "bus_route_id": body.get("bus_route_id") or None, "session": session, "fuel_type": fuel_type,
+            "quantity_litres": qty, "rate_per_litre": rate, "odometer_km": odometer,
+            "invoice_no": str(body.get("invoice_no") or "").strip() or None,
         })
-        # Quantity x Rate is offered as a convenience cross-check, never a silent
-        # override of the amount actually entered/approved for the expense.
-        if qty is not None and rate is not None:
-            computed = round(qty * rate, 2)
-            if abs(computed - amount) > 1.0:
-                doc["quantity_rate_mismatch_note"] = (
-                    f"Quantity x Rate = {computed}, differs from entered Amount {amount} — kept as entered."
-                )
     return doc
 
 
@@ -212,6 +221,7 @@ async def create_expense(body: Dict[str, Any], user=Depends(require_roles(*FINAN
 # status/void*/created_*/audit metadata - alter re-validates and updates content,
 # it never touches numbering, history, or void state (use /void for that).
 _EXPENSE_ALTER_FIELDS = {
+    "odometer_km", "invoice_no",
     "date", "category", "custom_expense_name", "description", "to_whom", "who_brought_bill",
     "amount", "payment_mode", "cheque_no", "remarks",
     "bus_route_id", "session", "fuel_type", "quantity_litres", "rate_per_litre",
@@ -387,6 +397,7 @@ async def expense_report_monthly(year: Optional[str] = None, user=Depends(get_cu
 @router.get("/reports/expenses/bus-fuel")
 async def expense_report_bus_fuel(
     bus_route_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
+    fuel_type: Optional[str] = None, vendor: Optional[str] = None,
     user=Depends(get_current_user),
 ):
     """Bus-wise / date-wise / monthly fuel expense — accounting-only, never touches
@@ -394,11 +405,17 @@ async def expense_report_bus_fuel(
     extra = {"category": FUEL_CATEGORY}
     if bus_route_id: extra["bus_route_id"] = bus_route_id
     rows = await _active_expenses(date_from, date_to, extra)
+    if fuel_type:
+        rows = [r for r in rows if r.get("fuel_type") == fuel_type]
+    if vendor and vendor.strip():
+        needle = vendor.strip().lower()
+        rows = [r for r in rows if needle in (r.get("to_whom") or "").lower()]
     by_bus: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         key = r.get("bus_route_id") or "unassigned"
         b = by_bus.setdefault(key, {
             "bus_route_id": r.get("bus_route_id"), "bus_no": r.get("bus_no"),
+            "bus_short": short_identifier(r.get("bus_no")) if r.get("bus_no") else None,
             "total_litres": 0.0, "total_amount": 0.0, "entries": 0,
         })
         b["total_litres"] += float(r.get("quantity_litres") or 0)
@@ -414,6 +431,9 @@ async def expense_report_bus_fuel(
         "entries": sorted(rows, key=lambda r: r.get("date",""), reverse=True),
         "grand_total_litres": round(sum(b["total_litres"] for b in out), 2),
         "grand_total_amount": round(sum(b["total_amount"] for b in out), 2),
+        "grand_entries": len(rows),
+        "grand_average_rate": (round(sum(b["total_amount"] for b in out) / sum(b["total_litres"] for b in out), 2)
+                               if sum(b["total_litres"] for b in out) else None),
     }
 
 
