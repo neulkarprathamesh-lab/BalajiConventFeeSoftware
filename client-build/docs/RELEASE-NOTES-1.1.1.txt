@@ -39,43 +39,54 @@ release (it replaces app.asar of the old remote-loading shell).
 
 2. PRODUCTION EXCEL IMPORT (FY 2026-27) - COMPLETED ON THE SERVER
 -----------------------------------------------------------------
-Source: 20 school Excel files ("Fee hub ... .xlsx").
-- Rows read: 2,462 student rows; 20 summary/total rows ignored.
-- Rows present in two files (identical): 98, counted once. Distinct records: 2,364.
-- Students updated: 2,044 (class, section, medium, stream, student type,
-  enrollment status, mobile, fee structure, bus where matched).
-- Students created: 212 (exact existing fee structure found for each).
-- Opening paid: Excel Total Paid minus the genuine FeeHub receipts, stored as the
-  opening/historical paid amount in the 2026-27 fee record. 2,100 students.
-  No receipts were created. Existing receipts (69) and receipt numbers are unchanged.
-- Idempotent: running the import again changes nothing.
-- Every changed student has a before/after record in the excel_import_audit collection.
-- Backup taken before the import: C:\balaji-fee\rollback\fee-import-prod-backup-20261006-150401
+Source: the 20 school Excel files ("Fee hub ... .xlsx"), the source of truth.
+- Data rows in the files: 2,482. Summary/total rows (not students): 20.
+  Valid student rows: 2,462.
+- Rows present in two files and identical: 98, counted once.
+- Distinct student records: 2,364. EVERY one is represented in FeeHub.
+- Students updated (existing FeeHub students, matched on admission number and
+  name): 2,255.
+- New students created: 108. Each has a new unique admission number "IMP-<number>",
+  because its Excel number is shared with a different existing student
+  (100 shared-number students) or with a same-number/different-name student (8).
+  The original Excel number is kept in source_admission_no.
+- Merged record: Saloni Santosh Uikey (Excel 9990) is the office-merged record of
+  9999 (Saloni Uikey). The merge is kept. Active 9999 carries her 2026-27 fee
+  position (paid 1,500, balance 0) and the source reference for 9990.
+  Record 9990 stays merged and hidden. No student was created for it.
+- Opening paid: Excel Total Paid minus the genuine FeeHub receipts, stored in the
+  2026-27 fee record. No receipts were created. Existing receipts (70, including
+  EP-2026-000012) and their numbers are unchanged.
+- Zero-fee Excel rows: 161, all imported. 156 existing students keep their FeeHub
+  fee (Excel 0 is treated as missing data, not overwritten).
+- Idempotent: running the corrected import again makes zero changes.
+- Every change has a before/after record in the excel_import_audit collection.
+- Backups before the import: C:alaji-feeollbackee-import-prod-backup-20261006-150401
+  and C:alaji-feeollbackee-import-prod-backup-20261006-165741
+- Students NOT imported: 0.
 
-3. KNOWN EXCEPTIONS (left untouched on purpose)
------------------------------------------------
-- 100 admission numbers belong to two different students in the Excel files
-  (200 rows). Not merged; 100 of them matched by full information and were
-  imported, 100 records are unresolved.
-- 8 students: same admission number as a FeeHub student but a different name.
-  Not updated.
-- 156 students with a zero fee in Excel: their existing FeeHub fee was kept.
-- 2 fee amounts without an existing structure (admission 3932: Excel 17,500 vs
-  FeeHub 15,000; admission 1022: Excel 22,500 vs FeeHub 14,500). FeeHub structure kept.
-- 356 bus values in the Excel files were not force-mapped to a bus stop
-  (276 not found, 80 area shared by several stops). Bus fields of those students unchanged.
+3. KNOWN EXCEPTIONS (imported, but a field needs review)
+--------------------------------------------------------
+- 2 fee amounts with no exact existing fee structure (admission 3932: Excel 17,500
+  vs FeeHub 15,000; admission 1022: Excel 22,500 vs FeeHub 14,500). The students are
+  imported and keep their FeeHub structure. The Excel fee is in the fee record.
+  The displayed total follows the structure until a structure is confirmed.
+- 156 zero-fee Excel rows for existing students: FeeHub fee kept (see above).
+- 356 Excel "Bus From" values not matched to exactly one bus stop (276 not found,
+  80 area shared by several stops). Those students are imported; bus is unchanged;
+  the raw Excel value is in source_bus_from.
 - 10 identical duplicate fee-structure records already exist in FeeHub. Not deleted.
 - Section letters differ between Excel and FeeHub for some classes (example:
   Class 1 English). Sections changed only where the mapping was exact.
-- Full list: fee-import-exceptions.csv (with the final import report).
+- Full list: fee-import-exceptions.csv and fee-import-final-report.md.
 
 4. FEE POSITION AFTER THE IMPORT (school, active students)
 ----------------------------------------------------------
                        Total Fee     Paid        Balance
 Before import          25,876,500    6,699,200   19,177,300
 After import           28,113,300   12,942,950   15,170,350
-Excel source           27,377,500   13,836,750   13,540,750 (2,364 distinct records,
-                                                           includes exceptions above)
+Excel source           27,377,500   13,836,750   13,540,750 (2,364 distinct records)
+Paid matches the Excel Total Paid for every imported student.
 
 5. LIMITATIONS
 --------------

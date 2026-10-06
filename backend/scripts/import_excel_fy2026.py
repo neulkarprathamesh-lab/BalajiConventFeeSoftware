@@ -86,7 +86,8 @@ def mobile_norm(v):
 
 # ---------------- Excel reading ----------------
 def read_excel(excel_dir):
-    files = sorted(Path(excel_dir).glob("*.xlsx"))
+    # "~$name.xlsx" files are Excel lock files (a workbook open in Excel), not data.
+    files = sorted(f for f in Path(excel_dir).glob("*.xlsx") if not f.name.startswith("~$"))
     out, summary = [], []
     for f in files:
         wb = openpyxl.load_workbook(f, data_only=True)
