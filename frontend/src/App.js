@@ -1,5 +1,6 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { DESKTOP_BUILD } from '@/lib/runtime';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { Toaster } from 'sonner';
 import Layout from '@/components/Layout';
@@ -70,11 +71,15 @@ const Protected = ({ children, roles }) => {
   return <>{children}{locked && <LockScreen />}</>;
 };
 
+// Desktop build: the UI is opened from file://, where path routing does not work,
+// so it uses hash routes. The web deployment keeps BrowserRouter.
+const Router = DESKTOP_BUILD ? HashRouter : BrowserRouter;
+
 export default function App() {
   return (
     <AuthProvider>
       <Toaster position="top-right" richColors />
-      <BrowserRouter>
+      <Router>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/" element={<Protected><Layout /></Protected>}>
@@ -136,7 +141,7 @@ export default function App() {
           <Route path="/parent/:adm" element={<StudentLookup />} />
           <Route path="/parent/:adm/slip" element={<FeeSlip />} />
         </Routes>
-      </BrowserRouter>
+      </Router>
     </AuthProvider>
   );
 }

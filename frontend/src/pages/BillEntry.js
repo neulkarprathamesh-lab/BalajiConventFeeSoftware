@@ -15,7 +15,7 @@ async function postBillOrQueue(payload) {
   } catch (e) {
     if (!e.response) {
       const op = await queueOperation('create_bill', payload);
-      return { data: null, queued: true, localId: op.local_id };
+      return { data: null, queued: true, localId: op.local_id, duplicate: !!op.duplicate };
     }
     throw e;
   }
@@ -106,8 +106,8 @@ export default function BillEntry() {
         await api.patch(`/bills/${editingId}`, body);
         toast.success('Bill updated');
       } else {
-        const { data, queued } = await postBillOrQueue(body);
-        if (queued) toast.success('Server unreachable — bill queued offline. It will be recorded automatically once connection returns.');
+        const { data, queued, duplicate } = await postBillOrQueue(body);
+        if (queued) toast.success(duplicate ? 'This bill is already waiting to sync on this PC, so it was not added a second time.' : 'Server unreachable — bill queued offline. It will be recorded automatically once connection returns.');
         else toast.success(`Bill ${data.bill_no} recorded`);
       }
       setShowForm(false); setForm(emptyForm); setEditingId(null);

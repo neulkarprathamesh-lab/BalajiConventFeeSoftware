@@ -49,3 +49,8 @@ backend/keys/
 # these contain real student names, admission numbers, and fee/payment
 # figures. Never tracked in git regardless of where/when they're generated.
 *.csv
+
+# Client build outputs (generated, never committed)
+_asar_current/renderer/app/
+frontend/build-desktop/
+client-build/node_modules/

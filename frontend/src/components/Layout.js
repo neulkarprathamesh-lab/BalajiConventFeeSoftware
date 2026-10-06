@@ -1,8 +1,10 @@
+import { publicUrl } from '@/lib/publicUrl';
 import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import api from '@/lib/api';
 import SyncStatus from '@/components/SyncStatus';
+import OfflineGate from '@/components/OfflineGate';
 
 const CURRENT_VERSION = '1.0.0';
 import {
@@ -115,7 +117,7 @@ export default function Layout() {
       <aside className="w-60 bg-slate-900 text-slate-100 flex flex-col no-print">
         <div className="px-5 py-5 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
-            <img src="/school-logo.jpeg" alt="Balaji Convent" className="w-10 h-10 rounded-full object-cover ring-1 ring-slate-700" data-testid="sidebar-logo" />
+            <img src={publicUrl('school-logo.jpeg')} alt="Balaji Convent" className="w-10 h-10 rounded-full object-cover ring-1 ring-slate-700" data-testid="sidebar-logo" />
             <div>
               <div className="font-heading font-bold text-[15px] leading-tight" data-testid="sidebar-app-name">Balaji FeeHub</div>
               <div className="text-[9px] tracking-[0.2em] uppercase text-slate-400 leading-tight">Balaji Convent · Butibori</div>
@@ -186,7 +188,9 @@ export default function Layout() {
         </div>
       </aside>
       <main className="flex-1 min-w-0 flex flex-col overflow-y-auto">
-        <Outlet />
+        <OfflineGate>
+          <Outlet />
+        </OfflineGate>
       </main>
     </div>
   );

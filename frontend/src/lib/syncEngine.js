@@ -1,33 +1,30 @@
-import { API_BASE } from './api';
+import { API_BASE, appVersion } from './runtime';
+import { idbGet, idbGetAll, idbPut, idbDelete, STORE_OPS, STORE_CACHE } from './offlineDb';
+import { nextRetryDelayMs, CONNECTED_POLL_MS, SIGNIN_POLL_MS, summarizeOps, cachedGetFor } from './syncPolicy';
 
 /**
- * Offline-first sync engine for Client/Cashier PCs.
+ * Offline-first sync engine (desktop client and web Client PCs).
  *
- * Design mirrors the backend (see backend/routers/sync.py):
- *  - device_id is a UUID generated ONCE and persisted in localStorage - stable
- *    across renames, restarts, and different logged-in users on the same PC.
- *  - When ONLINE, existing screens are completely unaffected - they keep
- *    calling the real API exactly as before. This engine only takes over
- *    for the specific offline-capable actions (student search/fee lookup via
- *    the local cache, receipt creation via the pending queue) when the
- *    connectivity check has actually failed.
- *  - Every queued operation gets a fresh, random `local_id`. Retrying a push
- *    with the same local_id can NEVER create a duplicate receipt - the
- *    server's `sync_operations.local_id` unique index guarantees that
- *    server-side; this engine just makes sure it never invents a new
- *    local_id for an operation it already has queued.
- *  - Connectivity is checked with the existing cheap, no-auth GET /api/version
- *    endpoint - not a new heavyweight probe - on a sensible interval (default
- *    20s), never aggressively.
+ * Design (mirrors backend/routers/sync.py):
+ *  - device_id is a UUID generated once and kept in localStorage.
+ *  - Every queued operation gets a random `local_id`. A retry re-sends the SAME
+ *    local_id, so the server's sync_operations unique index means it can never
+ *    create the receipt, expense or bill twice. Receipt numbers are assigned by
+ *    the server at push time (the same counter the online path uses), never on
+ *    the PC.
+ *  - queueOperation(..., { dedupeKey }) returns the already-queued operation when
+ *    the same form submission is queued again (double click, re-render), so one
+ *    user action cannot queue two records on this PC.
+ *  - Connectivity: GET /api/version (no auth). When it fails the engine goes
+ *    Offline and retries with backoff (3 s, 6 s, 12 s, 24 s, then every 30 s).
+ *    When the server answers again it resumes at once: no restart, no button.
+ *  - Status values: connecting | connected | syncing | offline | auth_required | error.
  */
 
-const DB_NAME = 'feehub_offline';
-const DB_VERSION = 1;
-const STORE_OPS = 'pending_ops';
-const STORE_CACHE = 'cache';
 const DEVICE_ID_KEY = 'feehub_device_id';
 const DEVICE_SECRET_KEY = 'feehub_device_secret';
 const TOKEN_KEY = 'bc_token';
+const PROBE_TIMEOUT_MS = 4000;
 
 function uuid() {
   if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
@@ -48,9 +45,7 @@ export function getDeviceId() {
 }
 
 // Optional per-device credential (see routers/sync.py set_device_password).
-// Only required once an administrator has explicitly assigned one for THIS
-// device_id - every device that never had one set keeps working exactly as
-// before (no header sent at all).
+// Only sent once an administrator has assigned one for this device_id.
 export function getDeviceSecret() {
   return localStorage.getItem(DEVICE_SECRET_KEY) || '';
 }
@@ -63,76 +58,36 @@ function deviceAuthHeaders() {
   return secret ? { 'X-Device-Secret': secret } : {};
 }
 
-function openDb() {
-  return new Promise((resolve, reject) => {
-    const req = window.indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE_OPS)) db.createObjectStore(STORE_OPS, { keyPath: 'local_id' });
-      if (!db.objectStoreNames.contains(STORE_CACHE)) db.createObjectStore(STORE_CACHE, { keyPath: 'key' });
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function idbGetAll(storeName) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readonly');
-    const req = tx.objectStore(storeName).getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function idbPut(storeName, value) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readwrite');
-    tx.objectStore(storeName).put(value);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-async function idbDelete(storeName, key) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readwrite');
-    tx.objectStore(storeName).delete(key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-async function idbGet(storeName, key) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readonly');
-    const req = tx.objectStore(storeName).get(key);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
 function authHeaders() {
   const token = localStorage.getItem(TOKEN_KEY);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+async function readDetail(res) {
+  try {
+    const body = await res.json();
+    return typeof body.detail === 'string' ? body.detail : '';
+  } catch (_) {
+    return '';
+  }
+}
+
 // ---------------- Pub/sub for UI status ----------------
 const listeners = new Set();
 let state = {
-  status: navigator.onLine ? 'connecting' : 'offline', // connecting|online|offline|syncing|error
-  lastSyncAt: null,
-  pendingCount: 0,
+  status: 'connecting',   // connecting | connected | syncing | offline | auth_required | error
+  online: false,          // last probe of the Main Server succeeded
+  lastSyncAt: null,       // ISO time of the last completed sync
+  pendingCount: 0,        // queued changes not yet confirmed by the server
+  failedCount: 0,         // subset of pendingCount the server rejected (needs attention)
   lastError: null,
+  failures: 0,            // consecutive failed passes while offline/error (drives backoff)
+  nextRetryAt: null,      // ISO time of the next automatic attempt while offline
 };
 
 function setState(patch) {
   state = { ...state, ...patch };
-  listeners.forEach((cb) => { try { cb(state); } catch (e) {} });
+  listeners.forEach((cb) => { try { cb(state); } catch (e) { /* a broken listener must not stop sync */ } });
 }
 
 export function subscribe(cb) {
@@ -145,8 +100,12 @@ export function getState() {
   return state;
 }
 
+export function isOnline() {
+  return state.online;
+}
+
 // ---------------- Connectivity ----------------
-export async function checkConnectivity(timeoutMs = 4000) {
+export async function checkConnectivity(timeoutMs = PROBE_TIMEOUT_MS) {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -159,14 +118,52 @@ export async function checkConnectivity(timeoutMs = 4000) {
 }
 
 // ---------------- Pending operations queue ----------------
-export async function queueOperation(opType, payload) {
-  const op = {
-    local_id: uuid(), op_type: opType, payload,
-    client_created_at: new Date().toISOString(), status: 'pending', retry_count: 0,
-  };
-  await idbPut(STORE_OPS, op);
-  await refreshPendingCount();
-  return op;
+// Queue writes are serialized so two rapid submissions cannot both pass the
+// dedupe check and both be stored.
+let queueChain = Promise.resolve();
+function serialQueue(fn) {
+  const run = queueChain.then(fn, fn);
+  queueChain = run.catch(() => {});
+  return run;
+}
+
+// Stable JSON (keys sorted) so the same form content always gives the same text.
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value === undefined ? null : value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  return `{${Object.keys(value).sort().filter((k) => value[k] !== undefined)
+    .map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+}
+
+/**
+ * Content fingerprint of a queued create. Two identical submissions (for example
+ * the same payment saved again after navigating back) map to one queued record.
+ */
+export function payloadFingerprint(opType, payload) {
+  return `${opType}:${stableStringify(payload)}`;
+}
+
+/**
+ * Queues an offline CREATE. Returns the queued operation. If an identical operation
+ * is still waiting to sync, that one is returned with `duplicate: true` and nothing
+ * new is stored. `options.dedupeKey` overrides the content fingerprint when a caller
+ * has its own notion of "the same submission".
+ */
+export function queueOperation(opType, payload, options = {}) {
+  const dedupeKey = (options && options.dedupeKey) || payloadFingerprint(opType, payload);
+  return serialQueue(async () => {
+    const existing = (await idbGetAll(STORE_OPS)).find((o) => o.dedupe_key === dedupeKey && o.status !== 'applied');
+    if (existing) return { ...existing, duplicate: true };
+    const op = {
+      local_id: uuid(), op_type: opType, payload,
+      client_created_at: new Date().toISOString(), status: 'pending', retry_count: 0,
+      dedupe_key: dedupeKey,
+    };
+    await idbPut(STORE_OPS, op);
+    await refreshPendingCount();
+    kickSync();
+    return op;
+  });
 }
 
 export async function getPendingOps() {
@@ -174,16 +171,17 @@ export async function getPendingOps() {
 }
 
 export async function refreshPendingCount() {
-  const ops = await idbGetAll(STORE_OPS);
-  setState({ pendingCount: ops.filter((o) => o.status !== 'applied').length });
-  return state.pendingCount;
+  const counts = summarizeOps(await idbGetAll(STORE_OPS));
+  setState({ pendingCount: counts.waiting, failedCount: counts.failed });
+  return counts.waiting;
 }
 
-// ---------------- Local cache (for offline student search / fee lookup) ----------------
+// ---------------- Local cache (last synced snapshot) ----------------
 export async function getCachedStudents() {
   const row = await idbGet(STORE_CACHE, 'students');
   return (row && row.value) || [];
 }
+
 export async function getCachedMeta() {
   const [fs, dept, cls, settings, rt] = await Promise.all([
     idbGet(STORE_CACHE, 'fee_structures'), idbGet(STORE_CACHE, 'departments'),
@@ -197,9 +195,22 @@ export async function getCachedMeta() {
   };
 }
 
+const SNAPSHOT_KEYS = ['students', 'fee_structures', 'departments', 'classes', 'receipt_types', 'settings', 'bus_routes'];
+
+/** Everything the offline GET fallback (api.js) may serve, in one read. */
+export async function getCachedSnapshot() {
+  const rows = await Promise.all(SNAPSHOT_KEYS.map((k) => idbGet(STORE_CACHE, k)));
+  const snap = {};
+  SNAPSHOT_KEYS.forEach((k, i) => { snap[k] = rows[i] && rows[i].value !== undefined ? rows[i].value : undefined; });
+  return snap;
+}
+
+export async function readCachedGet(url, params) {
+  return cachedGetFor(url, params, await getCachedSnapshot());
+}
+
 // Case-insensitive substring match on name/admission_no against the last
-// synced student snapshot — the offline fallback for the live GET /students?q=
-// search, used only once that live call has actually failed.
+// synced student snapshot.
 export async function searchCachedStudents(q, { busOnly = false, limit = 8 } = {}) {
   const needle = String(q || '').trim().toLowerCase();
   if (!needle) return [];
@@ -220,117 +231,225 @@ export async function getCachedSyncedAt() {
   return (row && row.synced_at) || null;
 }
 
+async function storeSnapshot(data) {
+  const values = {
+    students: data.students || [],
+    fee_structures: data.fee_structures || [],
+    departments: data.departments || [],
+    classes: data.classes || [],
+    receipt_types: data.receipt_types || [],
+    settings: data.settings || {},
+    bus_routes: data.bus_routes || [],
+  };
+  for (const key of Object.keys(values)) {
+    await idbPut(STORE_CACHE, { key, value: values[key], synced_at: data.synced_at });
+  }
+}
+
 // ---------------- Sync ----------------
-export async function syncNow() {
-  if (state.status === 'syncing') return state;
+function markOffline(reason) {
+  setState({
+    status: 'offline', online: false, lastError: reason || null,
+    failures: state.failures + 1,
+  });
+  return refreshPendingCount().then(() => state);
+}
+
+async function applyPushResults(sent, results) {
+  for (const r of results) {
+    const op = sent.find((o) => o.local_id === r.local_id);
+    if (!op) continue;
+    if (r.status === 'applied') {
+      await idbPut(STORE_OPS, { ...op, status: 'applied', result: r.result });
+    } else if (r.error) {
+      await idbPut(STORE_OPS, { ...op, status: 'failed', retry_count: (op.retry_count || 0) + 1, error: r.error });
+    }
+  }
+}
+
+async function runSync() {
   const deviceId = getDeviceId();
   setState({ status: 'syncing', lastError: null });
 
-  const online = await checkConnectivity();
-  if (!online) {
-    setState({ status: 'offline' });
+  const reachable = await checkConnectivity();
+  if (!reachable) return markOffline('The Main Server did not respond. Working offline.');
+  setState({ online: true });
+
+  if (!localStorage.getItem(TOKEN_KEY)) {
+    // Server reachable, but nobody is signed in to the server on this PC
+    // (typically after an offline sign-in). Queued work waits for a sign-in.
+    setState({ status: 'auth_required', failures: 0, nextRetryAt: null });
+    await refreshPendingCount();
     return state;
   }
 
   try {
-    // Heartbeat (cheap, tells Admin's Connected PCs this device is alive).
-    const pending = await getPendingOps();
-    const stillPending = pending.filter((o) => o.status !== 'applied');
-    const heartbeatRes = await fetch(`${API_BASE}/api/devices/heartbeat`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(), ...deviceAuthHeaders() },
-      body: JSON.stringify({ device_id: deviceId, app_version: '1.0.0', pending_count: stillPending.length }),
+    // Heartbeat (cheap; tells Admin's Connected PCs this device is alive).
+    const pendingBefore = (await idbGetAll(STORE_OPS)).filter((o) => o.status !== 'applied');
+    const hb = await fetch(`${API_BASE}/api/devices/heartbeat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(), ...deviceAuthHeaders() },
+      body: JSON.stringify({ device_id: deviceId, app_version: appVersion(), pending_count: pendingBefore.length }),
     });
-    if (heartbeatRes.status === 403) {
-      // The backend raises 403 from _check_device_auth for exactly one reason:
-      // existing.revoked is true (see routers/sync.py). Its own design intent
-      // is explicit: "cannot heartbeat/pull/push again until it registers
-      // under a fresh device_id". Without this, a revoked installation gets
-      // stuck retrying the same dead device_id forever - a permanent,
-      // unrecoverable Sync Error that looks like a live production outage
-      // even though every other device is syncing fine. Clearing the stored
-      // id lets the very next tick self-heal via normal first-heartbeat
-      // auto-registration; queued offline operations are keyed by their own
-      // local_id in IndexedDB, independent of device_id, so nothing queued
-      // is lost by this.
+    if (hb.status === 403) {
+      // Revoked by an administrator (see routers/sync.py). Forget the id so the
+      // next pass registers this PC again under a fresh device_id. Queued
+      // operations are keyed by their own local_id, so nothing is lost.
       localStorage.removeItem(DEVICE_ID_KEY);
       localStorage.removeItem(DEVICE_SECRET_KEY);
-      setState({ status: 'error', lastError: 'This device was revoked by an administrator. Re-registering automatically...' });
+      setState({ status: 'error', failures: state.failures + 1, lastError: 'This PC was revoked by an administrator. Registering again automatically...' });
+      await refreshPendingCount();
       return state;
     }
-    if (heartbeatRes.status === 401) {
-      // Distinct from revoked: an admin-assigned device password was rejected.
-      // Auto-generating a new device_id here would silently bypass that
-      // password instead of fixing it, so this one surfaces for a human to
-      // resolve (reset the device's password) rather than self-healing.
-      setState({ status: 'error', lastError: 'This device\'s credential was rejected by the Main Server. Ask an administrator to reset its device password.' });
-      return state;
-    }
-
-    // Push pending operations (each with its own stable local_id - safe to retry).
-    if (stillPending.length) {
-      const res = await fetch(`${API_BASE}/api/sync/push`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(), ...deviceAuthHeaders() },
-        body: JSON.stringify({ device_id: deviceId, operations: stillPending.map((o) => ({
-          local_id: o.local_id, op_type: o.op_type, payload: o.payload, client_created_at: o.client_created_at,
-        })) }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        for (const r of data.results) {
-          if (r.status === 'applied') {
-            const op = stillPending.find((o) => o.local_id === r.local_id);
-            if (op) await idbPut(STORE_OPS, { ...op, status: 'applied', result: r.result });
-          } else if (r.error) {
-            const op = stillPending.find((o) => o.local_id === r.local_id);
-            if (op) await idbPut(STORE_OPS, { ...op, status: 'failed', retry_count: (op.retry_count || 0) + 1, error: r.error });
-          }
-        }
+    if (hb.status === 401) {
+      const detail = await readDetail(hb);
+      if (/device credential/i.test(detail)) {
+        // An admin-assigned device password was rejected. Generating a new id
+        // here would bypass it, so this is left for an administrator to fix.
+        setState({ status: 'error', failures: state.failures + 1, lastError: "This PC's credential was rejected by the Main Server. Ask an administrator to reset its device password." });
+        await refreshPendingCount();
+        return state;
       }
+      // Sign-in expired (12 h session). Keep everything queued until the user signs in again.
+      setState({ status: 'auth_required', failures: 0, lastError: null });
+      await refreshPendingCount();
+      return state;
+    }
+    if (!hb.ok) throw new Error(`Heartbeat failed with HTTP ${hb.status}`);
+
+    // Push queued creates (each with its stable local_id; safe to retry).
+    if (pendingBefore.length) {
+      const res = await fetch(`${API_BASE}/api/sync/push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders(), ...deviceAuthHeaders() },
+        body: JSON.stringify({
+          device_id: deviceId,
+          operations: pendingBefore.map((o) => ({
+            local_id: o.local_id, op_type: o.op_type, payload: o.payload, client_created_at: o.client_created_at,
+          })),
+        }),
+      });
+      if (res.status === 401) {
+        setState({ status: 'auth_required', failures: 0, lastError: null });
+        await refreshPendingCount();
+        return state;
+      }
+      if (!res.ok) throw new Error(`Push failed with HTTP ${res.status}`);
+      const data = await res.json();
+      await applyPushResults(pendingBefore, data.results || []);
     }
 
-    // Pull latest master data for offline fallback (students/fee_structures/etc).
-    const pullRes = await fetch(`${API_BASE}/api/sync/pull?device_id=${encodeURIComponent(deviceId)}`, { headers: { ...authHeaders(), ...deviceAuthHeaders() } });
-    if (pullRes.ok) {
-      const data = await pullRes.json();
-      await idbPut(STORE_CACHE, { key: 'students', value: data.students, synced_at: data.synced_at });
-      await idbPut(STORE_CACHE, { key: 'fee_structures', value: data.fee_structures, synced_at: data.synced_at });
-      await idbPut(STORE_CACHE, { key: 'departments', value: data.departments, synced_at: data.synced_at });
-      await idbPut(STORE_CACHE, { key: 'classes', value: data.classes, synced_at: data.synced_at });
-      await idbPut(STORE_CACHE, { key: 'receipt_types', value: data.receipt_types || [], synced_at: data.synced_at });
-      await idbPut(STORE_CACHE, { key: 'settings', value: data.settings, synced_at: data.synced_at });
+    // Pull master data for offline reads (a full snapshot, as before).
+    const pullRes = await fetch(`${API_BASE}/api/sync/pull?device_id=${encodeURIComponent(deviceId)}`, {
+      headers: { ...authHeaders(), ...deviceAuthHeaders() },
+    });
+    if (pullRes.status === 401) {
+      setState({ status: 'auth_required', failures: 0, lastError: null });
+      await refreshPendingCount();
+      return state;
     }
+    if (!pullRes.ok) throw new Error(`Pull failed with HTTP ${pullRes.status}`);
+    await storeSnapshot(await pullRes.json());
 
-    // Drop applied ops from the queue (their result stays inside sync history on
-    // the server; nothing more to do locally once applied).
+    // Confirmed operations leave the queue (their results remain in server history).
     const all = await idbGetAll(STORE_OPS);
     for (const o of all) {
       if (o.status === 'applied') await idbDelete(STORE_OPS, o.local_id);
     }
     await refreshPendingCount();
-    setState({ status: 'online', lastSyncAt: new Date().toISOString() });
+    setState({
+      status: 'connected', online: true, lastSyncAt: new Date().toISOString(),
+      failures: 0, nextRetryAt: null, lastError: null,
+    });
   } catch (e) {
-    setState({ status: 'error', lastError: String(e) });
+    // Connection dropped mid-sync or the server answered with an error: treated
+    // like offline, so the retry schedule takes over.
+    return markOffline(e && e.message ? e.message : String(e));
   }
   return state;
 }
 
-let autoTimer = null;
-export function startAutoSync(intervalMs = 20000) {
-  stopAutoSync();
-  const tick = async () => {
-    if (!localStorage.getItem(TOKEN_KEY)) return; // not logged in yet
-    await syncNow();
-  };
-  tick();
-  autoTimer = setInterval(tick, intervalMs);
-  window.addEventListener('online', tick);
-  return () => stopAutoSync();
-}
-export function stopAutoSync() {
-  if (autoTimer) clearInterval(autoTimer);
-  autoTimer = null;
+let inFlight = null;
+
+/** Runs one sync pass. Concurrent calls share the pass already in progress. */
+export function syncNow() {
+  if (!inFlight) {
+    inFlight = runSync().finally(() => { inFlight = null; });
+  }
+  return inFlight;
 }
 
-// Kick off an initial pending-count read on module load so the badge is
-// correct even before the first sync tick completes.
+// ---------------- Scheduler ----------------
+let running = false;
+let timer = null;
+let detachBrowserEvents = null;
+
+function clearTimer() {
+  if (timer) clearTimeout(timer);
+  timer = null;
+}
+
+function delayFor(s) {
+  switch (s.status) {
+    case 'connected': return CONNECTED_POLL_MS;
+    case 'auth_required': return SIGNIN_POLL_MS;
+    case 'offline':
+    case 'error':
+      return nextRetryDelayMs(s.failures);
+    default:
+      return nextRetryDelayMs(1);
+  }
+}
+
+function scheduleNext(delayMs) {
+  clearTimer();
+  setState({ nextRetryAt: state.status === 'offline' ? new Date(Date.now() + delayMs).toISOString() : null });
+  timer = setTimeout(tick, delayMs);
+}
+
+async function tick() {
+  timer = null;
+  if (!running) return;
+  await syncNow();
+  if (!running) return;
+  scheduleNext(delayFor(state));
+}
+
+/**
+ * Starts background sync. Idempotent. The `intervalMs` argument is accepted for
+ * compatibility and ignored: the cadence now follows the connection state.
+ */
+export function startAutoSync() {
+  if (!running) {
+    running = true;
+    const onOnline = () => kickSync();
+    const onOffline = () => { markOffline('Network connection lost.').then(() => scheduleNext(delayFor(state))); };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    detachBrowserEvents = () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+    tick();
+  }
+  return () => stopAutoSync();
+}
+
+export function stopAutoSync() {
+  running = false;
+  clearTimer();
+  if (detachBrowserEvents) detachBrowserEvents();
+  detachBrowserEvents = null;
+}
+
+/** Runs a sync pass now and resets the retry schedule (after a queued change or a reconnect). */
+export function kickSync() {
+  if (!running) return syncNow();
+  clearTimer();
+  return tick();
+}
+
+// Initial badge count and last-synced time, so both are right before the first
+// pass finishes (the last-synced time survives a restart via the cache).
 refreshPendingCount().catch(() => {});
+getCachedSyncedAt().then((t) => { if (t && !state.lastSyncAt) setState({ lastSyncAt: t }); }).catch(() => {});

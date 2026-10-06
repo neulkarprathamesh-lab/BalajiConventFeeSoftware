@@ -1,7 +1,8 @@
+import { publicUrl } from '@/lib/publicUrl';
 import React from 'react';
 import { Bus as BusIconLucide } from 'lucide-react';
 
-export const LOGO = '/school-logo.jpeg';
+export const LOGO = publicUrl('school-logo.jpeg');
 
 /** Small utility to safely render a value or an em-dash. */
 export const V = (v) => (v == null || v === '' ? <span className="text-slate-400">—</span> : v);

@@ -222,3 +222,29 @@ class TestReportsWithLegacyRecords:
         rep = self._run_report(rows, bus_route_id=None, date_from=None, date_to=None, fuel_type="Diesel", vendor=None)
         assert rep["grand_entries"] == 1
         assert rep["grand_total_litres"] == 10
+
+
+# ---------------- Student record version (additive, for future conflict detection) ----------------
+
+from student_version import BASE_VERSION, current_version, next_version, versions_to_backfill  # noqa: E402
+
+
+class TestStudentVersion:
+    def test_legacy_student_without_version_is_version_one(self):
+        assert current_version({"id": "s1", "name": "x"}) == BASE_VERSION == 1
+
+    def test_each_change_increments_version(self):
+        assert next_version({"id": "s1"}) == 2
+        assert next_version({"id": "s1", "version": 4}) == 5
+
+    def test_invalid_stored_version_is_treated_as_base(self):
+        assert current_version({"version": "bad"}) == 1
+        assert current_version({"version": 0}) == 1
+
+    def test_backfill_targets_only_students_without_version(self):
+        students = [{"id": "a"}, {"id": "b", "version": 3}, {"id": "c", "version": None}]
+        assert versions_to_backfill(students) == ["a", "c"]
+
+    def test_backfill_leaves_existing_versions_alone(self):
+        students = [{"id": "b", "version": 3}]
+        assert versions_to_backfill(students) == []

@@ -1,3 +1,4 @@
+import { appOrigin } from '@/lib/runtime';
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import ReceiptFrame from './ReceiptFrame';
 import ReceiptToolbar from './ReceiptToolbar';
@@ -166,7 +167,7 @@ export default function ReceiptEngine({
             receiptNumber={r.number}
             dateStr={new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
             academicYear={r.academic_year}
-            qrValue={`${window.location.origin}/lookup/${r.number}`}
+            qrValue={`${appOrigin()}/lookup/${r.number}`}
             qrEnabled={qrEnabled}
             showBarcode={showBarcode}
             compact={isCompact}
@@ -198,7 +199,7 @@ export default function ReceiptEngine({
                 headerLine2={r.department_header2 || ''}
                 dateStr={new Date(r.created_at).toLocaleDateString('en-IN')}
                 academicYear={r.academic_year}
-                qrValue={`${window.location.origin}/lookup/${r.number}`}
+                qrValue={`${appOrigin()}/lookup/${r.number}`}
                 qrEnabled={qrEnabled} showBarcode={showBarcode} compact={isCompact}
               />
               {Body}

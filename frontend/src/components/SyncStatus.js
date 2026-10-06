@@ -1,59 +1,55 @@
-import React, { useEffect, useState } from 'react';
-import { subscribe, syncNow, startAutoSync, getState } from '@/lib/syncEngine';
-import { RefreshCw, Wifi, WifiOff, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
+import React, { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { startAutoSync, kickSync } from '@/lib/syncEngine';
+import useSyncStatus from '@/lib/useSyncStatus';
+import { describeStatus } from '@/lib/syncPolicy';
 
-const CONFIG = {
-  online:     { label: 'Up to date',   icon: CheckCircle2, cls: 'text-emerald-400' },
-  offline:    { label: 'Offline',      icon: WifiOff,       cls: 'text-red-400' },
-  connecting: { label: 'Connecting…',  icon: Loader2,       cls: 'text-amber-400 animate-spin' },
-  syncing:    { label: 'Syncing…',     icon: RefreshCw,     cls: 'text-blue-400 animate-spin' },
-  error:      { label: 'Sync problem', icon: AlertTriangle, cls: 'text-amber-400' },
+const DOT = {
+  green: 'bg-emerald-400',
+  amber: 'bg-amber-400 animate-pulse',
+  red: 'bg-red-400',
+  slate: 'bg-slate-400 animate-pulse',
 };
 
-function timeAgo(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-}
+const TITLE_CLASS = {
+  green: 'text-emerald-300',
+  amber: 'text-amber-300',
+  red: 'text-red-300',
+  slate: 'text-slate-300',
+};
 
 /**
- * Always-visible connection/sync widget - same component for every role, so
- * "Client has a Sync button" and "Admin has a Sync button" are the same
- * requirement satisfied once. Automatic sync runs in the background on a
- * fixed interval (see syncEngine.startAutoSync); this only adds the manual
- * trigger + visible status the cashier/admin actually watches.
+ * Always-visible connection badge: Connected / Syncing / Offline / Sign in to
+ * sync / Sync problem, with the last-synced time or the number of changes still
+ * waiting. Background sync starts here (see syncEngine.startAutoSync); a click
+ * runs a pass immediately.
  */
 export default function SyncStatus() {
-  const [state, setState] = useState(getState());
+  const state = useSyncStatus();
+  const nav = useNavigate();
+  const needsSignIn = state.status === 'auth_required';
 
   useEffect(() => {
-    const unsub = subscribe(setState);
-    const stop = startAutoSync(20000);
-    return () => { unsub(); stop && stop(); };
+    const stop = startAutoSync();
+    return () => { stop && stop(); };
   }, []);
 
-  const cfg = CONFIG[state.status] || CONFIG.offline;
-  const Icon = cfg.icon;
-  const busy = state.status === 'syncing' || state.status === 'connecting';
+  const d = describeStatus(state);
 
   return (
     <button
+      type="button"
       data-testid="sync-status-btn"
-      onClick={() => !busy && syncNow()}
-      title={state.lastError || (state.lastSyncAt ? `Last sync: ${timeAgo(state.lastSyncAt)}` : 'Never synced yet')}
-      className="w-full flex items-center gap-2 px-2 py-1.5 text-[13px] text-slate-300 hover:text-white hover:bg-slate-800 rounded mb-0.5 disabled:opacity-60"
-      disabled={busy}
+      data-status={state.status}
+      onClick={() => (needsSignIn ? nav('/login') : kickSync())}
+      title={needsSignIn ? 'Sign in to the Main Server to send the waiting changes' : (state.lastError || 'Click to check the Main Server now')}
+      className="w-full flex items-start gap-2 px-2 py-1.5 text-[13px] text-slate-300 hover:text-white hover:bg-slate-800 rounded mb-0.5"
     >
-      <Icon className={`w-4 h-4 ${cfg.cls}`} />
-      <span className="flex-1 text-left">
-        <span className="block leading-tight">SYNC</span>
-        <span className="block text-[10px] text-slate-500 leading-tight">
-          {state.pendingCount > 0 ? `${state.pendingCount} change${state.pendingCount === 1 ? '' : 's'} waiting` : cfg.label}
-        </span>
+      <span className={`mt-1.5 w-2.5 h-2.5 rounded-full shrink-0 ${DOT[d.tone]}`} aria-hidden="true" />
+      <span className="flex-1 text-left min-w-0">
+        <span className={`block leading-tight font-medium ${TITLE_CLASS[d.tone]}`} data-testid="sync-status-title">{d.title}</span>
+        <span className="block text-[10px] text-slate-500 leading-tight truncate" data-testid="sync-status-detail">{d.detail}</span>
       </span>
-      {state.lastSyncAt && state.pendingCount === 0 && state.status === 'online' && (
-        <span className="text-[10px] text-slate-500">{timeAgo(state.lastSyncAt)}</span>
-      )}
     </button>
   );
 }

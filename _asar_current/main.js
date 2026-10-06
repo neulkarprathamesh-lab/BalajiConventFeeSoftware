@@ -1,13 +1,20 @@
 /**
- * Balaji FeeHub - Electron main process
+ * Balaji FeeHub - Electron main process (offline-first client)
  *
- * One EXE, two behaviours:
- *   - On the Main Server PC: auto-detects http://127.0.0.1:8001 -> loads http://127.0.0.1:3000
- *   - On a Client PC:        loads saved server IP from %APPDATA%\BalajiFeeHub\config.json,
- *                            else LAN /24 scan, else manual entry via connect.html
+ * The application UI is BUNDLED inside this package (renderer/app/, built from
+ * frontend/ with REACT_APP_DESKTOP=1). It always opens from the local bundle,
+ * whether or not the Main Server is running:
  *
- * MongoDB stays on 127.0.0.1 on the Main Server. Clients only ever talk to the
- * backend + frontend on ports 8001/3000 - never to Mongo directly.
+ *   BalajiFeeHub.exe -> bundled UI -> local store (IndexedDB) -> sync engine
+ *                                                              \-> Main Server
+ *                                                                  (when reachable)
+ *
+ * The Main Server address comes from %APPDATA%\BalajiFeeHub\config.json
+ * (default 192.168.0.116:8001) and is changed in File > Server Settings. It is
+ * never hard-coded here. See config-store.js.
+ *
+ * MongoDB stays on the Main Server. Clients only ever talk to the backend on
+ * the configured port (8001 by default) - never to Mongo directly.
  */
 const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
@@ -18,21 +25,7 @@ const os = require('os');
 const { execFile } = require('child_process');
 const updater = require('./updater/updater');
 const clientUpdate = require('./updater/client-update');
-
-// -----------------------------------------------------------------------------
-// The offline app-shell cache (public/sw.js, registered from frontend/src/
-// index.js) needs a Service Worker, and Chromium only allows Service Workers
-// on a "secure context" - localhost/127.0.0.1 or https. A plain
-// http://192.168.0.116 LAN origin does NOT qualify by default, which would
-// silently disable the entire offline-shell-cache system for every real
-// Client PC (it only ever worked when running ON the Main Server itself, via
-// 127.0.0.1). Since the Main Server's address is now fixed/permanent, it's
-// safe to explicitly trust exactly that one known origin as secure - this
-// must be set before app.whenReady()/any window is created.
-app.commandLine.appendSwitch(
-  'unsafely-treat-insecure-origin-as-secure',
-  'http://192.168.0.116:3000,http://192.168.0.116:8001'
-);
+const serverConfig = require('./config-store');
 
 // -----------------------------------------------------------------------------
 // In-memory log ring buffer, for the diagnostic report ("Application logs").
@@ -58,48 +51,47 @@ function bufferLog(level, args) {
 });
 
 // -----------------------------------------------------------------------------
-// Config persistence
+// Server address - AppData config (see config-store.js). Read on every use so
+// a change made in File > Server Settings is picked up without a restart.
+// Never hard-coded: the default 192.168.0.116:8001 is supplied by config-store.
 // -----------------------------------------------------------------------------
-const CONFIG_DIR = path.join(app.getPath('appData'), 'BalajiFeeHub');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
-const BACKEND_PORT = 8001;
-const FRONTEND_PORT = 3000;
+const CONFIG_PATHS = serverConfig.configPaths(app.getPath('appData'), process.env.BALAJI_FEEHUB_CONFIG_DIR || null);
+const CONFIG_DIR = CONFIG_PATHS.dir;
+const CONFIG_FILE = CONFIG_PATHS.file;
 const PROBE_TIMEOUT_MS = 800;
 const MANUAL_TIMEOUT_MS = 5000;
-// The Main Server's LAN address is now fixed/permanent (static IP, never
-// DHCP) - see installer-src/BalajiFeeHub-Client.iss's matching default. A
-// Client PC that has never connected before can go straight here instead of
-// showing a manual "enter server IP" screen; only a genuinely fresh Main
-// Server PC install (which self-detects via 127.0.0.1 first, below) differs.
-const FIXED_MAIN_SERVER_IP = '192.168.0.116';
 
 function readConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-  } catch (_) {
-    return {};
-  }
+  return serverConfig.readConfigFile(CONFIG_FILE);
 }
-function writeConfig(cfg) {
+function writeConfig(patch) {
   try {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf8');
+    return serverConfig.writeConfigFile(CONFIG_FILE, patch);
   } catch (err) {
     console.error('Failed to write config:', err);
+    return readConfig();
   }
+}
+function currentServerHost() {
+  return readConfig().serverHost;
+}
+function currentServerAuthority() {
+  const c = readConfig();
+  return `${c.serverHost}:${c.serverPort}`;
 }
 
 // -----------------------------------------------------------------------------
-// Server probing
+// Server probing (status check only - the UI itself is never loaded from the
+// server, so a probe result never decides whether the app can open).
 // -----------------------------------------------------------------------------
-function probeServer(ip, timeoutMs) {
+function probeServer(host, port, timeoutMs) {
   return new Promise((resolve) => {
-    const options = { host: ip, port: BACKEND_PORT, path: '/api/version', timeout: timeoutMs };
+    const options = { host, port, path: '/api/version', timeout: timeoutMs };
     const req = http.get(options, (res) => {
       let body = '';
       res.on('data', (chunk) => { body += chunk; if (body.length > 4096) { req.destroy(); } });
       res.on('end', () => {
-        if (res.statusCode === 200) resolve(true); else resolve(false);
+        resolve(res.statusCode === 200);
       });
     });
     req.on('error', () => resolve(false));
@@ -120,39 +112,6 @@ function getLocalSubnets() {
     }
   }
   return Array.from(subnets);
-}
-
-async function scanLan(onProgress) {
-  const subnets = getLocalSubnets();
-  for (const prefix of subnets) {
-    const promises = [];
-    for (let i = 1; i <= 254; i++) {
-      const ip = `${prefix}${i}`;
-      promises.push(
-        probeServer(ip, PROBE_TIMEOUT_MS).then((ok) => (ok ? ip : null))
-      );
-    }
-    if (onProgress) onProgress(`Scanning ${prefix}0/24 (254 addresses in parallel)...`);
-    const results = await Promise.all(promises);
-    const found = results.find((x) => x);
-    if (found) return found;
-  }
-  return null;
-}
-
-async function detectMainServer(onProgress) {
-  if (onProgress) onProgress('Checking local Main Server (127.0.0.1)...');
-  if (await probeServer('127.0.0.1', 1500)) return '127.0.0.1';
-
-  const cfg = readConfig();
-  if (cfg.serverIp && cfg.serverIp !== '127.0.0.1') {
-    if (onProgress) onProgress(`Trying saved Main Server (${cfg.serverIp})...`);
-    if (await probeServer(cfg.serverIp, 3000)) return cfg.serverIp;
-  }
-
-  if (onProgress) onProgress('Scanning your school LAN for the Main Server...');
-  const found = await scanLan(onProgress);
-  return found;
 }
 
 // -----------------------------------------------------------------------------
@@ -195,7 +154,10 @@ function httpVersionTest(host, port, timeoutMs) {
 }
 
 async function gatherDiagnostics(targetIp) {
-  const host = targetIp || currentServerIp || readConfig().serverIp || null;
+  const cfgNow = readConfig();
+  const host = targetIp || cfgNow.serverHost || null;
+  const backendPort = cfgNow.serverPort;
+  const frontendPort = serverConfig.FRONTEND_PORT;
   const lines = [];
   const push = (s = '') => lines.push(s);
 
@@ -230,13 +192,13 @@ async function gatherDiagnostics(targetIp) {
     push(`Ping               : ${ping.ok ? 'OK' : 'FAILED'}`);
     if (ping.output) push('  ' + ping.output.replace(/\n/g, '\n  '));
 
-    const port3000 = await tcpPortTest(host, FRONTEND_PORT, 2000);
+    const port3000 = await tcpPortTest(host, frontendPort, 2000);
     push(`Port 3000 (frontend): ${port3000.ok ? 'OK - reachable' : 'FAILED - ' + port3000.detail}`);
 
-    const port8001 = await tcpPortTest(host, BACKEND_PORT, 2000);
+    const port8001 = await tcpPortTest(host, backendPort, 2000);
     push(`Port 8001 (backend) : ${port8001.ok ? 'OK - reachable' : 'FAILED - ' + port8001.detail}`);
 
-    const apiVer = await httpVersionTest(host, BACKEND_PORT, 3000);
+    const apiVer = await httpVersionTest(host, backendPort, 3000);
     push(`GET /api/version   : ${apiVer.ok ? `OK - HTTP ${apiVer.status}` : `FAILED - ${apiVer.error || 'HTTP ' + apiVer.status}`}`);
     if (apiVer.body) push(`  Response: ${apiVer.body}`);
 
@@ -308,8 +270,9 @@ async function clearCacheIfVersionChanged() {
 // Window management
 // -----------------------------------------------------------------------------
 let mainWindow = null;
-let currentServerIp = null;
 
+// The window always opens the BUNDLED UI (renderer/app/index.html). Nothing in
+// this section depends on the Main Server being reachable at launch.
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -345,130 +308,86 @@ function createMainWindow() {
   });
 
   // Start maximized every launch. maximize() before show() so the window is
-  // never briefly visible at its small default size first - it fills
-  // whatever display/resolution the current desktop happens to have (no
-  // hard-coded size), and width/height/min* above remain the fallback the
-  // window restores to if a user manually un-maximizes it.
+  // never briefly visible at its small default size first.
   mainWindow.once('ready-to-show', () => {
     mainWindow.maximize();
     mainWindow.show();
   });
   mainWindow.on('closed', () => { mainWindow = null; });
 
-  // External links (mailto, https support portal, etc.) open in system browser.
+  // Links to the school web pages on the Main Server may open in a window;
+  // anything else leaves for the system browser.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url) && !url.startsWith(`http://${currentServerIp}:`)) {
+    const cfg = readConfig();
+    const allowed = [serverConfig.serverBase(cfg), serverConfig.frontendBase(cfg)];
+    if (/^https?:\/\//i.test(url) && !allowed.some((base) => url === base || url.startsWith(base + '/'))) {
       shell.openExternal(url);
       return { action: 'deny' };
     }
     return { action: 'allow' };
   });
 
-  // If the Main Server goes down AFTER a successful connect (e.g. a mid-session
-  // reload while offline that the service worker's cache couldn't cover), do
-  // NOT throw the user back to a manual "Connect to Server" screen - the app
-  // must stay usable in Offline Mode with a small status indicator only (see
-  // SyncStatus.js / syncEngine.js on the frontend, which already polls
-  // /api/version in the background and auto-reconnects + resyncs the moment
-  // it's reachable again, with no restart and no user action needed). This
-  // only logs; "Change Main Server..." in the File menu remains the sole
-  // manual/deliberate way to reach connect.html.
+  // A failed load of the bundled UI itself is a packaging fault, not a server
+  // problem - log it so it shows up in the diagnostic report.
   mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDesc, validatedURL) => {
-    if (initialLoadPending) return;
-    if (validatedURL && validatedURL.includes(`:${FRONTEND_PORT}`)) {
-      console.warn(`Lost connection to ${validatedURL} (${errorCode} ${errorDesc}) - staying on current view (offline mode)`);
-    }
-  });
-
-  // One-time handlers for the initial quick-load attempt only (see
-  // attemptQuickLoad). did-finish-load fires even when the service worker
-  // served a cached response for a network-level failure underneath, so a
-  // successful quick-load here correctly covers both "server genuinely up"
-  // and "server down but app shell was cached from a prior session".
-  mainWindow.webContents.on('did-finish-load', () => {
-    if (!initialLoadPending) return;
-    initialLoadPending = false;
-  });
-  mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDesc, validatedURL) => {
-    if (!initialLoadPending) return;
-    if (validatedURL && validatedURL.includes(`:${FRONTEND_PORT}`)) {
-      initialLoadPending = false;
-      console.warn(`Quick-load to ${currentServerIp} failed (${errorCode} ${errorDesc}) and nothing was cached - falling back to discovery.`);
-      showConnectScreen();
-      startDetectionFlow();
-    }
+    console.error(`Bundled UI failed to load (${errorCode} ${errorDesc}) ${validatedURL || ''}`);
   });
 
   buildMenu();
-  attemptQuickLoad();
+  loadBundledApp();
 }
 
 // -----------------------------------------------------------------------------
-// Startup: try the app directly first (TODO - offline-first startup)
+// Startup: open the bundled UI. The Main Server is NOT contacted here - the
+// renderer's sync engine connects in the background and reports the status.
 // -----------------------------------------------------------------------------
-// The UI must open immediately and must not block on a server health check
-// (see public/sw.js on the frontend side, which caches the app shell so this
-// navigation can succeed from cache even while the Main Server is genuinely
-// unreachable). Only when this direct attempt genuinely fails - nothing
-// cached either, e.g. a brand-new install that has never connected before -
-// do we fall back to the existing connect.html discovery/manual-entry flow.
-// This never touches the sync engine, receipt numbering, or PIN logic - it
-// only changes WHICH screen loads first.
-let initialLoadPending = false;
-
-async function attemptQuickLoad() {
-  const cfg = readConfig();
-  let ip = cfg.serverIp;
-  if (!ip) {
-    // Never connected before on this PC. Quick local self-check in case this
-    // install IS the Main Server itself; otherwise go straight to the fixed,
-    // permanent Main Server address - never a blank/manual-entry screen for
-    // this, the normal first-launch case on every Client PC now that the
-    // Main Server's address never changes.
-    ip = (await probeServer('127.0.0.1', 1200)) ? '127.0.0.1' : FIXED_MAIN_SERVER_IP;
-  }
-  initialLoadPending = true;
+function loadBundledApp() {
   clearCacheIfVersionChanged().finally(() => {
-    if (!mainWindow) return;
-    loadServerApp(ip);
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.loadFile(path.join(__dirname, 'renderer', 'app', 'index.html'));
   });
 }
 
-function showConnectScreen(errorMessage) {
-  if (!mainWindow) return;
-  const url = 'file://' + path.join(__dirname, 'renderer', 'connect.html');
-  const suffix = errorMessage ? `?error=${encodeURIComponent(errorMessage)}` : '';
-  mainWindow.loadURL(url + suffix);
-}
-
-function loadServerApp(ip) {
-  if (!mainWindow) return;
-  currentServerIp = ip;
-  writeConfig({ serverIp: ip, lastConnectedAt: new Date().toISOString() });
-  mainWindow.loadURL(`http://${ip}:${FRONTEND_PORT}`);
-}
-
-async function startDetectionFlow() {
-  const send = (msg) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('connect-progress', msg);
-    }
+// Runtime facts the bundled UI needs before it can talk to the server. Read
+// synchronously by preload.js (ipcRenderer.sendSync) so the API base is known
+// before the first request is made.
+function runtimeSnapshot() {
+  const cfg = readConfig();
+  return {
+    isDesktop: true,
+    appVersion: updater.readInstalledVersion(),
+    serverHost: cfg.serverHost,
+    serverPort: cfg.serverPort,
+    serverBase: serverConfig.serverBase(cfg),
+    frontendBase: serverConfig.frontendBase(cfg),
   };
-  send('Starting...');
-  try {
-    const ip = await detectMainServer(send);
-    if (ip) {
-      send(`Found Main Server at ${ip}. Loading Balaji FeeHub...`);
-      await clearCacheIfVersionChanged();
-      setTimeout(() => loadServerApp(ip), 300);
-    } else {
-      send(null);
-      if (mainWindow) mainWindow.webContents.send('discovery-failed');
-    }
-  } catch (err) {
-    console.error('Detection error:', err);
-    if (mainWindow) mainWindow.webContents.send('discovery-failed');
+}
+
+let serverSettingsWindow = null;
+
+function openServerSettings() {
+  if (serverSettingsWindow && !serverSettingsWindow.isDestroyed()) {
+    serverSettingsWindow.focus();
+    return;
   }
+  serverSettingsWindow = new BrowserWindow({
+    width: 540,
+    height: 470,
+    parent: mainWindow || undefined,
+    modal: false,
+    resizable: false,
+    title: 'Balaji FeeHub - Server Settings',
+    icon: path.join(__dirname, 'icon.ico'),
+    autoHideMenuBar: true,
+    backgroundColor: '#0f172a',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  serverSettingsWindow.loadFile(path.join(__dirname, 'renderer', 'server-settings.html'));
+  serverSettingsWindow.on('closed', () => { serverSettingsWindow = null; });
 }
 
 // -----------------------------------------------------------------------------
@@ -480,7 +399,7 @@ function buildMenu() {
       label: '&File',
       submenu: [
         { label: 'Reload Balaji FeeHub', accelerator: 'F5', click: () => mainWindow && mainWindow.webContents.reload() },
-        { label: 'Change Main Server...', click: () => { currentServerIp = null; showConnectScreen(); startDetectionFlow(); } },
+        { label: 'Server Settings...', click: () => openServerSettings() },
         { type: 'separator' },
         { label: 'Exit', role: 'quit' },
       ],
@@ -510,7 +429,7 @@ function buildMenu() {
         {
           label: 'Create Diagnostic Report...',
           click: async () => {
-            const res = await gatherDiagnostics(currentServerIp).then(async (report) => {
+            const res = await gatherDiagnostics(currentServerHost()).then(async (report) => {
               const stamp = new Date().toISOString().replace(/[:.]/g, '-');
               const file = path.join(app.getPath('desktop'), `BalajiFeeHub-Client-Diagnostic-${stamp}.txt`);
               fs.writeFileSync(file, report, 'utf8');
@@ -542,8 +461,8 @@ function buildMenu() {
                 `Version ${version}\n` +
                 'Balaji Convent & Junior College, Butibori, Nagpur\n\n' +
                 'Fee & accounting software - LAN-based, offline-first.\n' +
-                (currentServerIp ? `Connected to Main Server: ${currentServerIp}\n` : '') +
-                `Config: ${CONFIG_FILE}`,
+                `Main Server: ${readConfig().serverHost}:${readConfig().serverPort}\n` +
+                `Settings: ${CONFIG_FILE}`,
               buttons: ['OK'],
             });
           },
@@ -557,30 +476,37 @@ function buildMenu() {
 // -----------------------------------------------------------------------------
 // IPC from renderer
 // -----------------------------------------------------------------------------
-ipcMain.handle('connect-manual', async (_event, rawIp) => {
-  const ip = (rawIp || '').trim().replace(/^https?:\/\//i, '').replace(/:\d+.*$/, '').replace(/\/$/, '');
-  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
-    return { ok: false, error: 'Please enter a valid IPv4 address (e.g. 192.168.1.10).' };
-  }
-  const ok = await probeServer(ip, MANUAL_TIMEOUT_MS);
-  if (!ok) {
-    return {
-      ok: false,
-      error: `Could not reach the Balaji FeeHub Main Server at http://${ip}:${BACKEND_PORT}. Check that the Main Server is running and that Windows Firewall allows port ${BACKEND_PORT}.`,
-    };
-  }
-  loadServerApp(ip);
-  return { ok: true, ip };
+// Synchronous snapshot for preload.js - the bundled UI reads the server base
+// before its first request (see frontend/src/lib/runtime.js).
+ipcMain.on('runtime:get-config', (event) => {
+  event.returnValue = runtimeSnapshot();
 });
 
-ipcMain.handle('rediscover', async () => {
-  showConnectScreen();
-  startDetectionFlow();
-  return { ok: true };
+ipcMain.handle('server-config:get', async () => runtimeSnapshot());
+
+// Test a candidate address WITHOUT saving it. A failed test never blocks saving:
+// the Main Server may legitimately be switched off while settings are changed.
+ipcMain.handle('server-config:test', async (_event, input) => {
+  const n = serverConfig.normalizeServerAddress(input && input.host, input && input.port);
+  if (!n.ok) return { ok: false, error: n.error };
+  const reachable = await probeServer(n.host, n.port, MANUAL_TIMEOUT_MS);
+  if (reachable) return { ok: true, host: n.host, port: n.port };
+  return {
+    ok: false,
+    error: `No Balaji FeeHub Main Server answered at http://${n.host}:${n.port}. Check that the Main Server is running and that Windows Firewall allows port ${n.port}.`,
+  };
 });
 
-ipcMain.handle('get-saved-server', async () => {
-  return readConfig();
+// Save the address and reload the bundled UI so the new base takes effect at
+// once. Local data (IndexedDB cache, pending queue) is kept across the reload.
+ipcMain.handle('server-config:save', async (_event, input) => {
+  const n = serverConfig.normalizeServerAddress(input && input.host, input && input.port);
+  if (!n.ok) return n;
+  writeConfig({ serverHost: n.host, serverPort: n.port, lastServerChangeAt: new Date().toISOString() });
+  console.log(`[BalajiFeeHub] Main Server address set to ${n.host}:${n.port}`);
+  if (serverSettingsWindow && !serverSettingsWindow.isDestroyed()) serverSettingsWindow.close();
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
+  return { ok: true, host: n.host, port: n.port };
 });
 
 // -----------------------------------------------------------------------------
@@ -844,7 +770,7 @@ function openUpdateWindow() {
 
 ipcMain.handle('updater:reconnect', async () => {
   if (updateWindow && !updateWindow.isDestroyed()) updateWindow.close();
-  if (mainWindow && currentServerIp) {
+  if (mainWindow) {
     // An update may have just changed the frontend build on disk - always
     // clear the cache and hard-reload rather than a plain reload(), which
     // would still honor any previously cached response for this origin.
@@ -859,7 +785,7 @@ ipcMain.handle('updater:reconnect', async () => {
 });
 
 updater.registerIpc({
-  getServerIp: () => currentServerIp || '127.0.0.1',
+  getServerIp: () => { const c = readConfig(); return `${c.serverHost}:${c.serverPort}`; },
   showUpdateWindow: openUpdateWindow,
 });
 
@@ -891,14 +817,15 @@ function scheduleBackgroundCheck() {
 // PIN, no separate window - the trust comes entirely from the RSA signature
 // check, and the only human action needed is "Update Now" / "Later".
 // -----------------------------------------------------------------------------
-function isMainServer() { return currentServerIp === '127.0.0.1'; }
+function isMainServer() { return serverConfig.isLocalMainServer(readConfig()); }
 
 async function runClientUpdateCheck({ silent }) {
   // Best-effort: flush any update-outcome report that couldn't reach the
   // Main Server earlier (queued locally) - piggybacks on the same periodic
   // tick that already runs every 30 min plus on manual "Check for Updates".
-  clientUpdate.flushQueuedReports(currentServerIp).catch(() => {});
-  const info = await clientUpdate.checkForClientUpdate(currentServerIp);
+  const serverAuthority = currentServerAuthority();
+  clientUpdate.flushQueuedReports(serverAuthority).catch(() => {});
+  const info = await clientUpdate.checkForClientUpdate(serverAuthority);
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (info.offline || info.error) {
     // "Main Server OFF" must never surface as an error popup - this is the
@@ -969,7 +896,6 @@ async function performClientUpdate(info) {
 function scheduleClientUpdateCheck() {
   const tick = () => {
     if (isMainServer()) return;
-    if (!currentServerIp) return;
     runClientUpdateCheck({ silent: true }).catch(() => {});
   };
   setTimeout(tick, 20_000);
@@ -1014,7 +940,7 @@ function reportPendingClientUpdateResult() {
       });
     }
   }, 2000);
-  clientUpdate.reportUpdateOutcome({ ...result, stage, currentServerIp, installedVersion: clientUpdate.readInstalledVersion() }).catch(() => {});
+  clientUpdate.reportUpdateOutcome({ ...result, stage, currentServerIp: currentServerAuthority(), installedVersion: clientUpdate.readInstalledVersion() }).catch(() => {});
 }
 
 // -----------------------------------------------------------------------------

@@ -1,11 +1,21 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Runtime facts for the bundled UI (frontend/src/lib/runtime.js). sendSync is
+// used on purpose: the UI needs the server base before its first request, and
+// the value is a small, local, in-process read from the main process.
+contextBridge.exposeInMainWorld('feehubRuntime', {
+  isDesktop: true,
+  getConfig: () => ipcRenderer.sendSync('runtime:get-config'),
+});
+
 contextBridge.exposeInMainWorld('feehub', {
-  onProgress: (cb) => ipcRenderer.on('connect-progress', (_e, msg) => cb(msg)),
-  onDiscoveryFailed: (cb) => ipcRenderer.on('discovery-failed', () => cb()),
-  connectManual: (ip) => ipcRenderer.invoke('connect-manual', ip),
-  rediscover: () => ipcRenderer.invoke('rediscover'),
-  getSavedServer: () => ipcRenderer.invoke('get-saved-server'),
+  // Server address (File > Server Settings). Values are saved to the AppData
+  // config file; the main process validates them again before saving.
+  server: {
+    get: () => ipcRenderer.invoke('server-config:get'),
+    test: (input) => ipcRenderer.invoke('server-config:test', input),
+    save: (input) => ipcRenderer.invoke('server-config:save', input),
+  },
 
   // opts: { widthMm, heightMm, landscape } - omit widthMm/heightMm to just
   // force orientation on the system default paper size.

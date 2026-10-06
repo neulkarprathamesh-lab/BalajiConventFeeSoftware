@@ -20,7 +20,7 @@ async function postExpenseOrQueue(payload) {
   } catch (e) {
     if (!e.response) {
       const op = await queueOperation('create_expense', payload);
-      return { data: null, queued: true, localId: op.local_id };
+      return { data: null, queued: true, localId: op.local_id, duplicate: !!op.duplicate };
     }
     throw e;
   }
@@ -137,8 +137,8 @@ export default function Expenses() {
         const { data } = await api.patch(`/expenses/${editingId}`, body);
         toast.success(`Expense ${data.expense_no} updated`);
       } else {
-        const { data, queued } = await postExpenseOrQueue(body);
-        if (queued) toast.success('Server unreachable — expense queued offline. It will be recorded automatically once connection returns.');
+        const { data, queued, duplicate } = await postExpenseOrQueue(body);
+        if (queued) toast.success(duplicate ? 'This expense is already waiting to sync on this PC, so it was not added a second time.' : 'Server unreachable — expense queued offline. It will be recorded automatically once connection returns.');
         else toast.success(`Expense ${data.expense_no} recorded`);
       }
       setForm(emptyForm); setShowForm(false); setEditingId(null);

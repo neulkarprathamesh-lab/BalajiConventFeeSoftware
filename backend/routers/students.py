@@ -2,6 +2,7 @@
 import asyncio
 import re
 from typing import Any, Dict, List, Optional
+from student_version import next_version
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Response
 from core import (
@@ -521,6 +522,7 @@ async def update_student_profile(sid: str, body: Dict[str, Any], user = Depends(
     if not changes:
         return {"ok": True, "changed": [], "student": student}
 
+    upd["version"] = next_version(student)
     await db.students.update_one({"id": sid}, {"$set": upd})
     for f, old_val, new_val in changes:
         await audit(user, "student_profile_edit", "student", sid, {

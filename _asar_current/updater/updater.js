@@ -351,7 +351,7 @@ function launchInstallerAndQuit(installerPath) {
  */
 function postLogin(serverIp, email, password) {
   return new Promise((resolve, reject) => {
-    const url = `http://${serverIp || '127.0.0.1'}:8001/api/auth/login`;
+    const url = `http://${serverIp || '127.0.0.1:8001'}/api/auth/login`;
     const req = net.request({ method: 'POST', url });
     req.setHeader('Content-Type', 'application/json');
     req.setHeader('User-Agent', USER_AGENT);
@@ -393,8 +393,9 @@ function postLogin(serverIp, email, password) {
  * tokens fix this for both entry points.
  */
 async function installUpdate({ serverIp, bcupdatePath, adminPin, authToken, adminEmail, adminPassword, onStage }) {
-  const ip = serverIp || '127.0.0.1';
-  const backendBase = `http://${ip}:8001/api/updates`;
+  // serverIp is host:port (see main.js getServerIp), taken from the AppData config.
+  const ip = serverIp || '127.0.0.1:8001';
+  const backendBase = `http://${ip}/api/updates`;
   const stage = (s, msg) => { if (onStage) onStage(s, msg); log(s, msg || ''); };
 
   if (!adminPin) throw new Error('Administrator PIN is required to apply an update.');
@@ -496,7 +497,7 @@ function registerIpc({ getServerIp, showUpdateWindow }) {
   ipcMain.handle('updater:check', async () => checkForUpdates());
   ipcMain.handle('updater:context', async () => {
     const serverIp = getServerIp();
-    return { installedVersion: readInstalledVersion(), serverIp, isMainServer: serverIp === '127.0.0.1' };
+    return { installedVersion: readInstalledVersion(), serverIp, isMainServer: String(serverIp).split(':')[0] === '127.0.0.1' };
   });
   ipcMain.handle('updater:openReleaseNotes', async (_e, url) => {
     if (url) shell.openExternal(url);

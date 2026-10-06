@@ -36,7 +36,6 @@ const { extractEntries } = require('./zip-lite');
 const CHECK_TIMEOUT_MS = 8000;
 const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_PACKAGE_MB = 300;
-const CLIENT_UPDATE_PORT = 8001;
 
 // The vendor's CLIENT-update public key, baked into the shipped Electron
 // bundle at build time (analogous to updater/config.json's GITHUB_REPO, but
@@ -64,7 +63,7 @@ function readInstalledVersion() {
 async function checkForClientUpdate(serverIp) {
   const installed = readInstalledVersion();
   if (!serverIp) return { available: false, installed, error: 'No Main Server configured yet.' };
-  const url = `http://${serverIp}:${CLIENT_UPDATE_PORT}/api/client-updates/latest`;
+  const url = `http://${serverIp}/api/client-updates/latest`;
   try {
     const info = await httpGetJson(url, CHECK_TIMEOUT_MS);
     if (!info || !info.published) return { available: false, installed, published: false };
@@ -74,7 +73,7 @@ async function checkForClientUpdate(serverIp) {
       releaseNotes: info.release_notes || '', releaseDate: info.release_date,
       minSupportedVersion: info.min_supported_version || '0.0.0',
       packageSize: info.package_size, expectedSha256: info.sha256,
-      downloadUrl: `http://${serverIp}:${CLIENT_UPDATE_PORT}${info.download_url}`,
+      downloadUrl: `http://${serverIp}${info.download_url}`,
     };
   } catch (e) {
     // Main Server unreachable/off - the expected, common case on a school
@@ -368,7 +367,7 @@ async function reportUpdateOutcome(raw) {
   const serverIp = raw.currentServerIp;
   if (!serverIp) { _writeQueue([..._readQueue(), report]); return; }
   try {
-    await httpPostJson(`http://${serverIp}:${CLIENT_UPDATE_PORT}/api/client-updates/report`, report, 8000);
+    await httpPostJson(`http://${serverIp}/api/client-updates/report`, report, 8000);
   } catch (e) {
     _writeQueue([..._readQueue(), report]);
   }
@@ -384,7 +383,7 @@ async function flushQueuedReports(serverIp) {
   const remaining = [];
   for (const report of queue) {
     try {
-      await httpPostJson(`http://${serverIp}:${CLIENT_UPDATE_PORT}/api/client-updates/report`, report, 8000);
+      await httpPostJson(`http://${serverIp}/api/client-updates/report`, report, 8000);
     } catch (e) {
       remaining.push(report);
     }

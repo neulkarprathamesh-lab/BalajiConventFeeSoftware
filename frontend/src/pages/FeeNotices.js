@@ -1,3 +1,5 @@
+import { publicUrl } from '@/lib/publicUrl';
+import { appOrigin } from '@/lib/runtime';
 import React, { useEffect, useState } from 'react';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
@@ -152,12 +154,12 @@ export default function FeeNotices() {
 
 function Notice({ s, preview = false, lang = 'en' }) {
   const t = NT[lang] || NT.en;
-  const lookupUrl = `${window.location.origin}/parent/${s.admission_no}`;
+  const lookupUrl = `${appOrigin()}/parent/${s.admission_no}`;
   return (
     <div className={`bg-white border border-slate-300 mx-auto ${preview ? 'max-w-2xl' : ''}`} style={{ pageBreakAfter: 'always', minHeight: preview ? undefined : '95vh' }} lang={lang}>
       <div className="p-6">
         <div className="flex items-center gap-4 border-b-2 border-slate-900 pb-3 mb-4">
-          <img src="/school-logo.jpeg" alt="logo" className="w-16 h-16 rounded-full object-cover" />
+          <img src={publicUrl('school-logo.jpeg')} alt="logo" className="w-16 h-16 rounded-full object-cover" />
           <div className="flex-1">
             <div className="font-heading text-xl font-bold tracking-tight">{lang==='mr' ? 'बालाजी कॉन्व्हेंट व कनिष्ठ महाविद्यालय' : 'BALAJI CONVENT & JUNIOR COLLEGE'}</div>
             <div className="text-[12px] text-slate-700">{lang==='mr' ? 'बुटीबोरी, नागपूर' : 'Butibori, Nagpur'} · {s.department_name} · {lang==='mr' ? 'शैक्षणिक वर्ष' : 'Academic Year'} {s.academic_year || '—'}</div>

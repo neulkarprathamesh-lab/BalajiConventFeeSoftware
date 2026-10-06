@@ -1,0 +1,12 @@
+{
+  "name": "balaji-feehub-client-build",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build tooling for the Balaji FeeHub Client installer and ZIP (not shipped to clients)",
+  "scripts": {
+    "build": "node build-client.js"
+  },
+  "dependencies": {
+    "@electron/asar": "^3.4.1"
+  }
+}

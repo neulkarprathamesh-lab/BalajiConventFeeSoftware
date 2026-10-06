@@ -1,10 +1,11 @@
+import { publicUrl } from '@/lib/publicUrl';
 import React, { useEffect, useState } from 'react';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
 import { Printer, FileDown } from 'lucide-react';
 import { toast } from 'sonner';
 
-const LOGO = "/school-logo.jpeg";
+const LOGO = publicUrl('school-logo.jpeg');
 
 // Numeric-aware class ordering (Nursery/KG/etc. before Class 1, then Class 1
 // through Class 12 in actual numeric order) - a plain localeCompare on

@@ -1,3 +1,4 @@
+import { publicUrl } from '@/lib/publicUrl';
 /**
  * Balaji FeeHub — Offline Installation Manual generator.
  *
@@ -469,7 +470,7 @@ function drawBlock(pdf, y, { h, p }) {
 /** Fetch the school logo as a data URL for embedding on the cover. */
 async function loadLogoDataUrl() {
   try {
-    const r = await fetch('/school-logo.jpeg');
+    const r = await fetch(publicUrl('school-logo.jpeg'));
     const blob = await r.blob();
     return await new Promise((resolve) => {
       const fr = new FileReader();

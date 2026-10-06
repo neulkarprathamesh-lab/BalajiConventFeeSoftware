@@ -1,3 +1,4 @@
+import { publicUrl } from '@/lib/publicUrl';
 import React, { useEffect, useMemo, useState } from 'react';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
@@ -75,7 +76,7 @@ export default function DayEnd() {
           {/* Header */}
           <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between print:bg-slate-900">
             <div className="flex items-center gap-3">
-              <img src="/school-logo.jpeg" className="w-11 h-11 rounded-full object-cover ring-1 ring-slate-700" alt="logo" />
+              <img src={publicUrl('school-logo.jpeg')} className="w-11 h-11 rounded-full object-cover ring-1 ring-slate-700" alt="logo" />
               <div>
                 <div className="font-heading font-bold text-[15px] leading-tight">Balaji Convent & Junior College</div>
                 <div className="text-[11px] text-slate-300 uppercase tracking-widest">Cashier Day-End Summary</div>

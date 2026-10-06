@@ -216,12 +216,14 @@ async def sync_pull(device_id: str, x_device_secret: Optional[str] = Header(None
         "_id": 0, "id": 1, "name": 1, "admission_no": 1, "class_id": 1, "section": 1,
         "medium": 1, "stream": 1, "department_id": 1, "fee_structure_id": 1,
         "bus_required": 1, "bus_stop_no": 1, "guardian_name": 1, "guardian_mobile": 1,
-        "academic_year": 1,
+        "academic_year": 1, "version": 1,
     }).to_list(10000)
     fee_structures = await db.fee_structures.find({}, {"_id": 0}).to_list(2000)
     departments = await db.departments.find({}, {"_id": 0}).to_list(50)
     classes = await db.classes.find({}, {"_id": 0}).to_list(2000)
     receipt_types = await db.receipt_types.find({"enabled": True}, {"_id": 0}).to_list(50)
+    # Bus master (read-only offline; edits are server-only).
+    bus_routes = await db.bus_routes.find({}, {"_id": 0}).to_list(500)
     settings = await db.settings.find_one({}, {"_id": 0, "pin_hash": 0}) or {}
 
     fs_by_id = {f["id"]: f for f in fee_structures}
@@ -312,7 +314,7 @@ async def sync_pull(device_id: str, x_device_secret: Optional[str] = Header(None
         "synced_at": synced_at,
         "students": students, "fee_structures": fee_structures,
         "departments": departments, "classes": classes, "receipt_types": receipt_types,
-        "settings": settings,
+        "bus_routes": bus_routes, "settings": settings,
     }
 
 

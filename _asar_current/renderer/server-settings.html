@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Balaji FeeHub - Server Settings</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="brand">
+      <div class="brand-mark">
+        <div class="mark-inner">B</div>
+      </div>
+      <div class="brand-text">
+        <h1>Main Server address</h1>
+        <p>Where this PC finds the Balaji FeeHub Main Server</p>
+      </div>
+    </header>
+
+    <section class="panel">
+      <p class="lead">Balaji FeeHub opens on this PC even when the Main Server is switched off. This address is used to sync automatically whenever the Main Server is reachable.</p>
+      <div class="form-row">
+        <label for="host-input">Server IP address or host name</label>
+        <input id="host-input" type="text" placeholder="192.168.0.116" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="form-row">
+        <label for="port-input">Port</label>
+        <input id="port-input" type="text" inputmode="numeric" placeholder="8001" autocomplete="off" spellcheck="false" />
+      </div>
+      <p class="hint">Default: 192.168.0.116 port 8001. Use 127.0.0.1 only on the Main Server PC itself.</p>
+      <div class="actions">
+        <button id="test-btn" class="btn-secondary">Test connection</button>
+        <button id="save-btn" class="btn-primary">Save</button>
+      </div>
+      <p id="message" class="error hidden"></p>
+    </section>
+
+    <footer class="foot">
+      <span id="current-info"></span>
+      <span>Saved on this PC - survives restarts and updates</span>
+    </footer>
+  </main>
+
+  <script src="server-settings.js"></script>
+</body>
+</html>

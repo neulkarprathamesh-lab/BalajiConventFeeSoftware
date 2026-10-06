@@ -1,10 +1,34 @@
+import { publicUrl } from '@/lib/publicUrl';
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import api, { API_BASE } from '@/lib/api';
+import { isDesktop, appVersion } from '@/lib/runtime';
+import useSyncStatus from '@/lib/useSyncStatus';
+import { describeStatus } from '@/lib/syncPolicy';
+import { startAutoSync } from '@/lib/syncEngine';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, Eye, EyeOff, Info, RefreshCw } from 'lucide-react';
 
 const LAST_EMAIL_KEY = 'bc_last_email';
+
+// Desktop client only: says whether the Main Server is reachable before sign-in.
+// Offline sign-in is possible for users who signed in on this PC before.
+function LoginConnectionNote() {
+  const state = useSyncStatus();
+  useEffect(() => {
+    // The signed-out screen checks the Main Server too (the layout starts the check once signed in).
+    const stop = startAutoSync();
+    return () => { stop && stop(); };
+  }, []);
+  const d = describeStatus(state);
+  const offline = state.status === 'offline';
+  return (
+    <p data-testid="login-connection" data-status={state.status} className={`text-xs mt-2 ${offline ? 'text-amber-700' : 'text-slate-500'}`}>
+      <strong>{d.title}</strong> · {d.detail}
+      {offline && <span> — you can still sign in if you have signed in on this PC before.</span>}
+    </p>
+  );
+}
 
 export default function Login() {
   // Remember only the last successfully-used email on THIS computer — never the password.
@@ -91,6 +115,12 @@ export default function Login() {
       setDiag((d) => ({ ...d, stage: 'success', http_status: 200, response_keys: 'token,user', role: user?.role, latency_ms: Math.round(t1 - t0), token_stored: !!localStorage.getItem('bc_token') }));
       nav('/');
     } catch (e) {
+      if (e?.offlineMessage) {
+        // Offline sign-in refused: say why, without the network-error wording.
+        setErr(e.offlineMessage);
+        setDiag((d) => ({ ...d, stage: 'offline_refused', network_error: true }));
+        return;
+      }
       const t1 = performance.now();
       const status = e?.response?.status ?? null;
       const detail = e?.response?.data?.detail;
@@ -117,7 +147,7 @@ export default function Login() {
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
       <div className="hidden lg:block relative">
-        <img src="/login-bg.png" alt="Balaji Convent" className="w-full h-full object-cover" />
+        <img src={publicUrl('login-bg.png')} alt="Balaji Convent" className="w-full h-full object-cover" />
         <div className="absolute inset-0 bg-slate-900/55" />
         <div className="absolute bottom-10 left-10 right-10 text-white">
           <div className="text-xs tracking-[0.3em] uppercase text-slate-300 mb-3">Balaji Convent &amp; Junior College · Butibori, Nagpur</div>
@@ -128,11 +158,11 @@ export default function Login() {
       <div className="flex items-center justify-center p-8 bg-white">
         <form onSubmit={submit} className="w-full max-w-sm space-y-5" data-testid="login-form">
           <div className="flex items-center gap-3 mb-2">
-            <img src="/school-logo.jpeg" alt="Balaji Convent logo" className="w-14 h-14 rounded-full object-cover ring-1 ring-slate-200" data-testid="login-logo" />
+            <img src={publicUrl('school-logo.jpeg')} alt="Balaji Convent logo" className="w-14 h-14 rounded-full object-cover ring-1 ring-slate-200" data-testid="login-logo" />
             <div>
               <div className="font-heading font-bold text-xl leading-tight" data-testid="login-app-name">Balaji FeeHub</div>
               <div className="text-[11px] tracking-widest uppercase text-slate-500 leading-tight">Fee Management System</div>
-              <div className="text-[10px] tracking-wider uppercase text-slate-400 leading-tight">Version 1.0</div>
+              <div className="text-[10px] tracking-wider uppercase text-slate-400 leading-tight" data-testid="login-version">Version {appVersion()}</div>
             </div>
           </div>
           <div className="border-t border-slate-100 pt-4">
@@ -142,6 +172,7 @@ export default function Login() {
           <div>
             <h2 className="font-heading text-2xl font-semibold text-slate-900 tracking-tight">Sign in</h2>
             <p className="text-sm text-slate-500 mt-1">Enter your credentials to access the accounting workstation.</p>
+            {isDesktop() && <LoginConnectionNote />}
           </div>
           <div>
             <div className="flex items-center justify-between">
@@ -173,7 +204,7 @@ export default function Login() {
           </button>
 
           {diag && (
-            <details data-testid="login-diagnostics" className="mt-3 rounded border border-slate-200 bg-slate-50 text-[11px] font-mono text-slate-700" open={diag.stage === 'failed' || conn.state === 'failed'}>
+            <details data-testid="login-diagnostics" className="mt-3 rounded border border-slate-200 bg-slate-50 text-[11px] font-mono text-slate-700" open={diag.stage === 'failed' || (conn.state === 'failed' && !isDesktop())}>
               <summary className="cursor-pointer px-3 py-2 flex items-center gap-1.5 text-slate-600 font-sans font-medium text-xs">
                 <Info className="w-3.5 h-3.5" /> Login diagnostics (click to {(diag.stage === 'failed' || conn.state === 'failed') ? 'hide' : 'show'})
               </summary>

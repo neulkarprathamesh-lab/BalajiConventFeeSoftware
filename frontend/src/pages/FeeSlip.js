@@ -1,3 +1,5 @@
+import { publicUrl } from '@/lib/publicUrl';
+import { appOrigin } from '@/lib/runtime';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';
@@ -5,7 +7,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { Printer, ArrowLeft, Shield, Info } from 'lucide-react';
 import { API } from '@/lib/api';
 
-const LOGO = "/school-logo.jpeg";
+const LOGO = publicUrl('school-logo.jpeg');
 const inr = (n) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n || 0);
 
 // Deterministic slip id (stable per family per day)
@@ -40,7 +42,7 @@ export default function FeeSlip() {
 
   const children = data.children || [];
   const combined = data.combined || {};
-  const verifyUrl = `${window.location.origin}/parent/${adm}`;
+  const verifyUrl = `${appOrigin()}/parent/${adm}`;
 
   return (
     <div className="min-h-screen bg-slate-100">

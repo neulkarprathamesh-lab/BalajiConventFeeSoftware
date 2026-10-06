@@ -1,3 +1,4 @@
+import { publicUrl } from '@/lib/publicUrl';
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
@@ -5,7 +6,7 @@ import { ShieldCheck, ShieldAlert, XCircle, MapPin, Phone, Calendar, Hash, Schoo
 import ReceiptEngine from '@/components/receipt/ReceiptEngine';
 import { API } from '@/lib/api';
 
-const LOGO = '/school-logo.jpeg';
+const LOGO = publicUrl('school-logo.jpeg');
 const inr  = (n) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n || 0);
 
 /**

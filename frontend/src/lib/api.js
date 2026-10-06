@@ -1,71 +1,87 @@
 import axios from 'axios';
+import { API_BASE, isDesktop } from './runtime';
+import { isOnline, readCachedGet } from './syncEngine';
+import { isRequestAllowedOffline } from './syncPolicy';
 
 /**
- * Balaji FeeHub - final production login architecture.
+ * Balaji FeeHub - API client.
  *
- * The compiled bundle MUST NOT contain any reference to a build-time
- * REACT_APP_BACKEND_URL. Everything is resolved at RUNTIME from
- * `window.location`, guaranteeing:
+ * Web deployment: the API base comes from the page address (unchanged).
+ * Desktop client: the API base comes from the AppData server config
+ * (runtime.js). Nothing is loaded from the server, so the same code works
+ * with the Main Server switched off.
  *
- *   - Main Server PC:  http://127.0.0.1:3000   ->  http://127.0.0.1:8001/api
- *   - Client PC (LAN): http://192.168.x.y:3000 ->  http://192.168.x.y:8001/api
- *   - Emergent preview: https://*.preview.emergentagent.com  ->  same-origin /api
- *
- * There is NO fallback string containing the developer's preview URL.
+ * Authentication is purely the Authorization: Bearer header (from localStorage),
+ * never cookies. See the note on withCredentials below.
  */
-function detectApiBase() {
-  if (typeof window === 'undefined' || !window.location) return '';
-  const loc = window.location;
-  // Emergent preview / dev environment: ingress routes /api on same origin.
-  if (loc.hostname && /(^|\.)emergentagent\.com$/i.test(loc.hostname)) {
-    return loc.origin;
-  }
-  // Production LAN pattern: frontend on :3000, backend on :8001, same host.
-  // Covers Main Server and every Client PC without any hard-coded IP.
-  return `${loc.protocol}//${loc.hostname || '127.0.0.1'}:8001`;
-}
-
-function detectSource() {
-  if (typeof window === 'undefined' || !window.location) return 'no-window';
-  if (/(^|\.)emergentagent\.com$/i.test(window.location.hostname || '')) return 'emergent-preview';
-  return 'lan-runtime';
-}
-
-const API_BASE = detectApiBase();
 const API = `${API_BASE}/api`;
 
 // Safe boot log - never leaks credentials or tokens.
 try {
   // eslint-disable-next-line no-console
-  console.info('[BalajiFeeHub] api base =>', API_BASE, '(source:', detectSource() + ')');
+  console.info('[BalajiFeeHub] api base =>', API_BASE, '(desktop:', isDesktop() + ')');
 } catch (_) {}
 
 // withCredentials is intentionally OFF: this app authenticates purely via
-// the Authorization: Bearer <token> header (set by the interceptor below,
-// from localStorage) - never via cookies. Turning it on forces the browser
-// to treat every cross-port call (frontend :3000 -> backend :8001, which
-// are different origins even on 127.0.0.1) as a "credentialed" CORS
-// request. Since the login endpoint's cookie is Secure=true and is never
-// actually stored by the browser over plain http://, the request never
-// carries a Cookie header, so the backend's CORS_ORIGINS=* response is
-// never upgraded to a specific-origin match - and browsers reject a
-// wildcard Access-Control-Allow-Origin on a credentialed request outright,
-// before the app ever sees the response body. curl/Postman never enforce
-// CORS, so this failure is invisible outside a real browser.
+// the Authorization: Bearer <token> header. Turning it on forces the browser
+// to treat every cross-origin call as a "credentialed" CORS request, and the
+// backend's wildcard Access-Control-Allow-Origin is then rejected before the
+// app sees the response body.
 const api = axios.create({ baseURL: API, withCredentials: false });
+
+/** Offline in this build = the desktop client cannot reach the Main Server right now. */
+export function isOfflineNow() {
+  return isDesktop() && !isOnline();
+}
+
+function offlineBlockedError() {
+  const e = new Error('This change needs the Main Server, which cannot be reached right now. Connect to the Main Server and try again.');
+  e.offlineBlocked = true;
+  return e;
+}
+
+// Navigation to the sign-in screen. The desktop client uses hash routing (file://),
+// so it sets the hash and reloads; the web app keeps its normal path.
+export function navigateToLogin() {
+  if (isDesktop()) {
+    window.location.hash = '#/login';
+    window.location.reload();
+  } else {
+    window.location.href = '/login';
+  }
+}
+
+function onLoginPage() {
+  return isDesktop() ? window.location.hash.startsWith('#/login') : window.location.pathname === '/login';
+}
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('bc_token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (isDesktop() && !isRequestAllowedOffline(config.method, config.url) && !isOnline()) {
+    // Server-only write while the Main Server is unreachable: refused here,
+    // before it leaves the PC. Offline CREATEs use the pending queue instead.
+    return Promise.reject(offlineBlockedError());
+  }
   return config;
 });
 
 api.interceptors.response.use(
   (r) => r,
-  (err) => {
-    if (err?.response?.status === 401 && window.location.pathname !== '/login') {
+  async (err) => {
+    const config = err && err.config;
+    const isGet = config && String(config.method || 'get').toLowerCase() === 'get';
+    if (isDesktop() && isGet && !(err && err.response)) {
+      // Main Server unreachable: serve the read from the last synced snapshot,
+      // if the snapshot has it. The UI shows "as of last sync" (see OfflineBanner).
+      const cached = await readCachedGet(config.url, config.params).catch(() => ({ found: false }));
+      if (cached.found) {
+        return { data: cached.data, status: 200, statusText: 'OK (offline cache)', headers: {}, config, request: null, fromCache: true };
+      }
+    }
+    if (err?.response?.status === 401 && !onLoginPage()) {
       localStorage.removeItem('bc_token');
-      window.location.href = '/login';
+      navigateToLogin();
     }
     return Promise.reject(err);
   }

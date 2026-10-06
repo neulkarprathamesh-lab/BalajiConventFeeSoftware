@@ -1,0 +1,40 @@
+BALAJI FEEHUB CLIENT {{VERSION}} - DEPENDENCIES
+=================================================
+
+A normal Client PC needs NOTHING installed by hand to run the client.
+Everything the client uses is inside BalajiFeeHub-Client-Setup.exe or
+BalajiFeeHub-Client-Windows-x64.zip.
+
+NOT required on the Client PC
+  - Node.js / npm
+  - Python
+  - Visual Studio or the Visual C++ build tools
+  - .NET SDK
+  - MongoDB
+  - Google Chrome or any other browser
+  - Any development tool
+
+Bundled inside the client (no separate install)
+  - Electron 31.7.7 application shell (includes Node.js runtime 20.x)
+  - Chromium 126.0.6478.234 rendering engine (runs the bundled UI)
+  - The bundled Balaji FeeHub user interface (React production build)
+  - Electron runtime DLLs: ffmpeg.dll, libEGL.dll, libGLESv2.dll,
+    vk_swiftshader.dll, vulkan-1.dll, d3dcompiler_47.dll
+  - Client updater (signed .bcupdate packages from the Main Server)
+
+Operating system
+  - Windows 10 (64-bit, version 1809 or later) or Windows 11 (64-bit)
+  - Windows Update kept on, so the standard Windows runtime is current
+
+Network (only needed to sync, not to work)
+  - Connection to the Main Server on the school LAN: TCP port 8001
+    (default; the port is set in File > Server Settings)
+  - The client works fully without it (offline mode). Nothing needs the
+    internet to run.
+
+Optional, for receipt printing
+  - The receipt printer's own Windows driver (installed through Windows
+    Settings > Printers). Only needed on cashier PCs that print receipts.
+
+Compiled-in build tools (developer machine only, not on Client PCs)
+  - Inno Setup 6 (used to build Setup.exe). Not needed to install or run.

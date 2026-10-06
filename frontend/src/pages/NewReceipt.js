@@ -1,3 +1,4 @@
+import { publicUrl } from '@/lib/publicUrl';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import api from '@/lib/api';
@@ -23,7 +24,7 @@ async function postReceiptOrQueue(payload) {
   } catch (e) {
     if (!e.response) {
       const op = await queueOperation('create_receipt', payload);
-      return { data: null, queued: true, localId: op.local_id };
+      return { data: null, queued: true, localId: op.local_id, duplicate: !!op.duplicate };
     }
     throw e;
   }
@@ -398,13 +399,15 @@ export default function NewReceipt() {
       if (!payloadLines.length) return toast.error('Select at least one instalment');
       setBusy(true);
       try {
-        const { data, queued } = await postReceiptOrQueue({
+        const { data, queued, duplicate } = await postReceiptOrQueue({
           receipt_type: 'school', department_id: student.department_id, receipt_type_id: receiptTypeId || null, student_id: student.id,
           payer_name: student.name, payment_mode: mode, payment_reference: ref || null, lines: payloadLines, remarks: remarks || null,
           metadata: { class_name: student.class_name, guardian_name: student.guardian_name, guardian_mobile: student.guardian_mobile },
         });
         if (queued) {
-          toast.success('Server unreachable — payment queued offline. A real receipt will be created automatically once connection returns.');
+          toast.success(duplicate
+            ? 'This payment is already waiting to sync on this PC, so it was not added a second time.'
+            : 'Server unreachable — payment queued offline. A real receipt will be created automatically once connection returns.');
           nav('/receipts');
         } else {
           toast.success(`Receipt ${data.number} created`);
@@ -457,10 +460,11 @@ export default function NewReceipt() {
 
     const createdReceipts = [];
     let queuedCount = 0;
+    let duplicateCount = 0;
     try {
       for (const g of groups) {
         const dept_id = sidToDept[g.student_id];
-        const { data, queued } = await postReceiptOrQueue({
+        const { data, queued, duplicate } = await postReceiptOrQueue({
           receipt_type: receiptType, department_id: dept_id, receipt_type_id: g.student_id === student.id ? (receiptTypeId || null) : null, student_id: g.student_id,
           payer_name: g.student_name, payment_mode: mode, payment_reference: ref || null,
           lines: g.lines, remarks: remarks || null,
@@ -475,14 +479,20 @@ export default function NewReceipt() {
               : {}),
           },
         });
-        if (queued) queuedCount += 1; else createdReceipts.push(data);
+        if (queued) { queuedCount += 1; if (duplicate) duplicateCount += 1; } else createdReceipts.push(data);
       }
       if (queuedCount > 0) {
-        toast.success(
-          createdReceipts.length
-            ? `${createdReceipts.length} receipt(s) created, ${queuedCount} queued offline — will sync automatically when connection returns.`
-            : `Server unreachable — ${queuedCount} payment(s) queued offline. Real receipts will be created automatically once connection returns.`
-        );
+        const newlyQueued = queuedCount - duplicateCount;
+        if (newlyQueued === 0) {
+          toast.success('This payment is already waiting to sync on this PC, so it was not added a second time.');
+        } else {
+          const dupNote = duplicateCount ? ` (${duplicateCount} of them were already waiting and were not added a second time.)` : '';
+          toast.success(
+            (createdReceipts.length
+              ? `${createdReceipts.length} receipt(s) created, ${newlyQueued} queued offline — will sync automatically when connection returns.`
+              : `Server unreachable — ${newlyQueued} payment(s) queued offline. Real receipts will be created automatically once connection returns.`) + dupNote
+          );
+        }
         nav('/receipts');
       } else if (createdReceipts.length === 1) {
         toast.success(`Receipt ${createdReceipts[0].number} created`);
@@ -510,7 +520,7 @@ export default function NewReceipt() {
     <div className="min-h-full flex flex-col">
       <div className="bg-slate-900 text-white px-6 py-3 flex items-center justify-between no-print">
         <div className="flex items-center gap-3">
-          <img src="/school-logo.jpeg" alt="logo" className="w-9 h-9 rounded-full object-cover ring-1 ring-slate-700" />
+          <img src={publicUrl('school-logo.jpeg')} alt="logo" className="w-9 h-9 rounded-full object-cover ring-1 ring-slate-700" />
           <div>
             <div className="font-heading font-semibold leading-tight">Balaji Convent · Receipt Manager</div>
             <div className="text-[11px] text-slate-400 tracking-wide uppercase">Cashier Console</div>

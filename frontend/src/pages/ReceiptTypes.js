@@ -1,3 +1,4 @@
+import { publicUrl } from '@/lib/publicUrl';
 import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import api from '@/lib/api';
@@ -339,7 +340,7 @@ const PreviewModal = ({ rt, onClose }) => {
           )}
           <div className="relative bg-slate-900 text-white flex items-center justify-between px-4 py-2 -mx-6 -mt-6 mb-4">
             <div className="flex items-center gap-2.5">
-              <img src="/school-logo.jpeg" alt="logo" className="w-8 h-8 rounded-full object-cover ring-1 ring-slate-700" />
+              <img src={publicUrl('school-logo.jpeg')} alt="logo" className="w-8 h-8 rounded-full object-cover ring-1 ring-slate-700" />
               <div className="leading-tight">
                 <div className="font-heading font-semibold text-[13px]">{rt?.name || 'Balaji Convent · Receipt Manager'}</div>
                 <div className="text-[9px] uppercase tracking-widest text-slate-300">Official Fee Receipt</div>
@@ -353,7 +354,7 @@ const PreviewModal = ({ rt, onClose }) => {
           {rt?.header_text && <div className="relative text-center text-[11px] font-semibold uppercase tracking-widest text-slate-700 pb-2 border-b border-slate-200 mb-2">{rt.header_text}</div>}
           <div className="relative grid grid-cols-12 gap-3 pb-4 border-b-2 border-slate-900">
             <div className="col-span-6 flex items-start gap-3">
-              <img src="/school-logo.jpeg" alt="logo" className="w-20 h-20 rounded-full object-cover ring-1 ring-slate-300" />
+              <img src={publicUrl('school-logo.jpeg')} alt="logo" className="w-20 h-20 rounded-full object-cover ring-1 ring-slate-300" />
               <div>
                 <div className="font-heading font-black text-xl tracking-tight uppercase">{(rt?.name || 'BALAJI CONVENT').toUpperCase()}</div>
                 <div className="text-[13px] font-bold tracking-wide uppercase text-slate-800">BUTIBORI, NAGPUR</div>

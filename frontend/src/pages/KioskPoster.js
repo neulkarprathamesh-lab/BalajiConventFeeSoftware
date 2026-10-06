@@ -1,9 +1,11 @@
+import { publicUrl } from '@/lib/publicUrl';
+import { appOrigin } from '@/lib/runtime';
 import React, { useState } from 'react';
 import { PageHeader } from '@/components/Layout';
 import { QRCodeSVG } from 'qrcode.react';
 import { Printer, Smartphone, ScanLine } from 'lucide-react';
 
-const LOGO = "/school-logo.jpeg";
+const LOGO = publicUrl('school-logo.jpeg');
 
 const T = {
   en: {
@@ -49,7 +51,7 @@ const T = {
 export default function KioskPoster() {
   const [lang, setLang] = useState('en');
   const t = T[lang];
-  const base = window.location.origin;
+  const base = appOrigin();
 
   return (
     <>

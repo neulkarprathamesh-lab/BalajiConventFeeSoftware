@@ -1,0 +1,74 @@
+BALAJI FEEHUB CLIENT {{VERSION}} - MANUAL TEST: MAIN SERVER OFF / ON
+=====================================================================
+
+Who runs this: the administrator, at the physical Main Server PC and one
+Client PC. This test is NOT run by the build. It stops the real server, so do
+it when no cashier is working.
+
+Before you start
+  - Client PC: install BalajiFeeHub-Client-Setup.exe (or extract the ZIP) and
+    open Balaji FeeHub once while the Main Server is ON. Sign in with a cashier
+    or administrator account. Stay signed in, then close the client.
+  - Main Server PC: note the time. Services: BalajiFeeHub-Backend (and
+    BalajiFeeHub-Frontend, which can keep running).
+  - Use the TEST STUDENT or a test expense for step 4 if you do not want a
+    real record. Anything created in step 4 is real data.
+
+Steps and what you should see
+
+ 1. SERVER ON, START CLIENT
+    Open Balaji FeeHub.
+    Expected: the window opens at once. Bottom-left shows "Connected /
+    Synced just now" within a few seconds. No Sync button is needed.
+
+ 2. SERVER OFF
+    On the Main Server PC: services.msc > BalajiFeeHub-Backend > Stop.
+    Expected within about 30 seconds on the Client PC: the window stays open
+    (no blank screen, no error page). Bottom-left shows "Offline / Server
+    unavailable / Local mode". A yellow strip at the top says "Local mode".
+
+ 3. WORK WHILE OFF
+    a) Students > search for a student name you know. Expected: the student
+       appears from the last synced data.
+    b) New Receipt > search the student > press Save (Amount pre-filled).
+       Expected: "Server unreachable - payment queued offline". Record the
+       student name and amount.
+    c) Expenses > add one expense > Save. Expected: "expense queued offline".
+    d) Settings (left menu, administrator) > Expected: "This screen needs the
+       Main Server" (this is correct while the server is off).
+
+ 4. SERVER ON AGAIN (no client restart)
+    On the Main Server PC: services.msc > BalajiFeeHub-Backend > Start.
+    Expected on the Client PC within about 30 seconds:
+      - if the signed-in session is still valid: "Connected / Synced just
+        now" by itself, and the queued items are sent;
+      - if the session expired while off: "Sign in to sync / N changes
+        waiting". Click that line, sign in once, and the queued items are sent.
+    Then check the Client PC: the queue is empty (no "waiting" count).
+
+ 5. CHECK ON THE MAIN SERVER
+    Receipts: the receipt from step 3b exists once, with a normal receipt
+    number (for example JC-2026-0000xx). Expenses: the expense from step 3c
+    exists once. Press Save only once in step 3 - pressing it again for the
+    same payment is refused on the Client PC as "already waiting".
+
+ 6. OFFLINE SIGN-IN
+    Close the Client PC app. Stop BalajiFeeHub-Backend. Open the app again.
+    Sign in with the same password: expected to work, and the screen says
+    Offline. Sign in with a wrong password: expected "Incorrect password".
+    Start the backend again, then close the app.
+
+ 7. OPTIONAL: change the server address (File > Server Settings)
+    Enter the address, press Test connection, then Save.
+    Expected: the app reloads at once, with no restart.
+
+Report back
+  - Times for steps 2 and 4 (how long until Offline / Connected).
+  - Any error message, blank screen or crash, with a screenshot.
+  - Diagnostic report if anything looks wrong: File > Create Diagnostic Report.
+
+What counts as a pass
+  - The app opens and works with the server off (steps 1-3).
+  - It reconnects by itself with the server on, and the queue empties (step 4).
+  - Each queued item appears exactly once on the Main Server (step 5).
+  - Offline sign-in works for the signed-in user and refuses a wrong password (step 6).

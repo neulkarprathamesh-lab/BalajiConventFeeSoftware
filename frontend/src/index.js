@@ -1,3 +1,4 @@
+import { isDesktop } from "@/lib/runtime";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -25,7 +26,10 @@ root.render(
 // Offline app-shell cache (see public/sw.js) - lets the Client open the real
 // app even when the Main Server is unreachable at launch, as long as this
 // device has loaded the app at least once before. Never touches /api/*.
-if ('serviceWorker' in navigator) {
+if (isDesktop()) {
+  // Desktop client: the UI is bundled with the app (file://), so the app-shell
+  // service worker is not needed - the bundle itself is always available offline.
+} else if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js')
       .then(() => console.info('[BalajiFeeHub] Offline app-shell cache: active'))
