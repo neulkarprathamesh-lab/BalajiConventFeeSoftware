@@ -9,6 +9,18 @@ Hashes:     see SHA256SUMS.txt in the same folder.
 Not used: the old .bcupdate client-update package. It is incompatible with this
 release (it replaces app.asar of the old remote-loading shell).
 
+1a. 2026-10-07 FIX: Reports page Print button
+------------------------------------------------
+The Reports page "Print" button called the browser's own print on the Reports
+screen (sidebar, filters, on-screen cards) instead of the report. It now opens
+the exact same server-generated "Daily Fee & Expense Report" PDF that Export
+already produces (same endpoint, same date, same layout), and prints that
+document, the same proven approach already used on the Daily Fee & Expense
+Report page. Export is unchanged. Verified in the actual Electron client:
+window.print() is never called on the Reports screen, the same PDF request
+fires for Print and Export, and the opened document matches the report for
+both a date with transactions and a date with none.
+
 1. WHAT THIS CLIENT DOES
 ------------------------
 - Opens its own bundled screens from BalajiFeeHub.exe. The Main Server is not
@@ -61,8 +73,10 @@ Source: the 20 school Excel files ("Fee hub ... .xlsx"), the source of truth.
   fee (Excel 0 is treated as missing data, not overwritten).
 - Idempotent: running the corrected import again makes zero changes.
 - Every change has a before/after record in the excel_import_audit collection.
-- Backups before the import: C:alaji-feeollbackee-import-prod-backup-20261006-150401
-  and C:alaji-feeollbackee-import-prod-backup-20261006-165741
+- Backups before the import: C:alaji-fee
+ollbackee-import-prod-backup-20261006-150401
+  and C:alaji-fee
+ollbackee-import-prod-backup-20261006-165741
 - Students NOT imported: 0.
 
 3. KNOWN EXCEPTIONS (imported, but a field needs review)

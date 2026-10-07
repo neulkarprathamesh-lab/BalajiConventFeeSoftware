@@ -58,19 +58,30 @@ export default function Reports() {
   };
 
   const [exportBusy, setExportBusy] = useState(false);
-  const exportDailyFeeExpense = async () => {
-    // The Collection Report above covers a date RANGE; the Daily Fee & Expense
-    // Report is inherently a single day's accounting summary, so it is always
-    // generated for the "From" date currently selected here.
+  // The Collection Report above covers a date RANGE; the Daily Fee & Expense
+  // Report is inherently a single day's accounting summary, so it is always
+  // generated for the "From" date currently selected here — same server-rendered
+  // PDF endpoint DailyFeeExpenseReport.js uses, so Print and Export can never
+  // disagree (same data, same filters, same calculations, same layout).
+  // Print must NOT call window.print() on this React page (that prints the
+  // Reports screen itself — filters, sidebar, on-screen cards). Instead it opens
+  // the exact same generated PDF in its own window and triggers THAT window's
+  // print, exactly like the proven Print button on DailyFeeExpenseReport.js.
+  const openDailyFeeExpensePdf = async (autoPrint = false) => {
     setExportBusy(true);
     const win = window.open('', '_blank');
     try {
       const { data: blob } = await api.get('/reports/daily-fee-expense/pdf', { params: { date: from }, responseType: 'blob' });
       const blobUrl = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
-      if (win) win.location.href = blobUrl;
+      if (win) {
+        win.location.href = blobUrl;
+        if (autoPrint) {
+          win.addEventListener('load', () => { try { win.print(); } catch (e) {} });
+        }
+      }
     } catch (e) {
       if (win) win.close();
-      toast.error('Could not generate the Daily Fee & Expense Report');
+      toast.error(autoPrint ? 'Could not print the Daily Fee & Expense Report' : 'Could not generate the Daily Fee & Expense Report');
     }
     setExportBusy(false);
   };
@@ -80,8 +91,8 @@ export default function Reports() {
       <PageHeader title="Reports" subtitle="Collection reports · reconcile with cash / bank"
         actions={
           <div className="flex gap-2 no-print">
-            <button onClick={() => window.print()} className="h-9 px-3 border border-slate-300 rounded text-sm hover:bg-slate-50 flex items-center gap-1.5"><Printer className="w-4 h-4" /> Print</button>
-            <button onClick={exportDailyFeeExpense} disabled={exportBusy} title={`Daily Fee & Expense Report for ${from}`} className="h-9 px-3 bg-slate-900 text-white rounded text-sm flex items-center gap-1.5 hover:bg-slate-800 disabled:opacity-60"><FileDown className="w-4 h-4" /> {exportBusy ? 'Exporting…' : 'Export'}</button>
+            <button onClick={() => openDailyFeeExpensePdf(true)} disabled={exportBusy} title={`Print the Daily Fee & Expense Report for ${from}`} className="h-9 px-3 border border-slate-300 rounded text-sm hover:bg-slate-50 flex items-center gap-1.5 disabled:opacity-60"><Printer className="w-4 h-4" /> {exportBusy ? 'Opening…' : 'Print'}</button>
+            <button onClick={() => openDailyFeeExpensePdf(false)} disabled={exportBusy} title={`Daily Fee & Expense Report for ${from}`} className="h-9 px-3 bg-slate-900 text-white rounded text-sm flex items-center gap-1.5 hover:bg-slate-800 disabled:opacity-60"><FileDown className="w-4 h-4" /> {exportBusy ? 'Exporting…' : 'Export'}</button>
           </div>
         }
       />
