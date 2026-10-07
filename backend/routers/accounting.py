@@ -531,7 +531,7 @@ async def daily_fee_expense_report_pdf(date: Optional[str] = None, user=Depends(
         f"<td>{_html.escape(e['description'])}</td><td>{_html.escape(e['who_brought_bill'])}</td>"
         f"<td>{_html.escape(e['payment_mode'].replace('_',' ').upper())}</td><td class='r'>{_inr(e['amount'])}</td></tr>"
         for i, e in enumerate(data["expenses"])
-    ) or "<tr><td colspan='7' style='text-align:center;color:#888;'>No expenses recorded for this date.</td></tr>"
+    ) or "<tr><td colspan='7' style='text-align:center;color:#555;'>No expenses recorded for this date.</td></tr>"
 
     contact_line = " | ".join(x for x in [
         f"Mob: {school['phone']}" if school.get("phone") else None,
@@ -545,27 +545,27 @@ async def daily_fee_expense_report_pdf(date: Optional[str] = None, user=Depends(
          separate document; the actual fee receipt's own paper size/layout/
          printer config is completely untouched. */
       @page {{ size: 142.8mm 210mm; margin: 5mm 4mm; }}
-      body {{ font-family: Helvetica, Arial, sans-serif; color: #1a1a1a; font-size: 7.2px; }}
-      .hd {{ text-align:center; border-bottom: 1.5px solid #222; padding-bottom: 5px; margin-bottom: 6px; }}
-      .hd h1 {{ font-size: 12px; margin: 0 0 2px; letter-spacing: 0.4px; }}
-      .hd .sub {{ font-size: 6.6px; color:#333; margin: 1px 0; }}
-      .title {{ text-align:center; font-size: 9px; font-weight: bold; letter-spacing: 0.6px; margin: 6px 0 6px; text-transform: uppercase; }}
-      .meta {{ font-size: 6.6px; color:#222; margin-bottom: 8px; border: 1px solid #ccc; padding: 3px 5px; }}
+      body {{ font-family: Helvetica, Arial, sans-serif; color: #000; font-size: 7.2px; }}
+      .hd {{ text-align:center; border-bottom: 1.5px solid #000; padding-bottom: 5px; margin-bottom: 6px; }}
+      .hd h1 {{ font-size: 12px; margin: 0 0 2px; letter-spacing: 0.4px; color:#000; }}
+      .hd .sub {{ font-size: 6.6px; color:#222; margin: 1px 0; }}
+      .title {{ text-align:center; font-size: 9px; font-weight: bold; letter-spacing: 0.6px; margin: 6px 0 6px; text-transform: uppercase; color:#000; }}
+      .meta {{ font-size: 6.6px; color:#000; margin-bottom: 8px; border: 1px solid #555; padding: 3px 5px; }}
       .meta div {{ padding: 0.5px 0; }}
       .meta b {{ display:inline-block; width: 32mm; }}
-      .section {{ font-weight: bold; font-size: 7.4px; text-transform: uppercase; background:#eef1f5; border: 1px solid #999; padding: 2px 4px; margin: 7px 0 3px; }}
+      .section {{ font-weight: bold; font-size: 7.4px; text-transform: uppercase; background:#eef1f5; border: 1.2px solid #000; padding: 2px 4px; margin: 7px 0 3px; color:#000; }}
       table.acc {{ width:100%; border-collapse: collapse; margin-bottom: 3px; }}
-      table.acc th {{ background:#f0f0f0; border: 1px solid #999; padding: 2px 2px; text-align:left; font-size: 6.2px; }}
-      table.acc td {{ border: 1px solid #ccc; padding: 2px 2px; font-size: 6.4px; word-break: break-word; }}
-      table.acc td.r, table.acc th.r {{ text-align:right; font-family: monospace; }}
-      table.acc tr.total td {{ font-weight: bold; border-top: 1.5px solid #333; background:#f7f7f7; }}
+      table.acc th {{ background:#dfe3e8; border: 1px solid #000; padding: 2px 2px; text-align:left; font-size: 6.2px; font-weight: bold; color:#000; }}
+      table.acc td {{ border: 1px solid #555; padding: 2px 2px; font-size: 6.4px; word-break: break-word; color:#000; }}
+      table.acc td.r, table.acc th.r {{ text-align:right; font-family: monospace; font-weight: bold; }}
+      table.acc tr.total td {{ font-weight: bold; border-top: 1.5px solid #000; border-bottom: 1px solid #000; background:#e9e9e9; color:#000; }}
       table.plain {{ width:100%; border-collapse: collapse; }}
-      table.plain td {{ padding: 2px 5px; border: 1px solid #ccc; font-size: 7px; }}
-      table.plain td.r {{ text-align:right; font-family: monospace; }}
-      td.b {{ font-weight: bold; }}
+      table.plain td {{ padding: 2px 5px; border: 1px solid #555; font-size: 7px; color:#000; }}
+      table.plain td.r {{ text-align:right; font-family: monospace; font-weight: bold; }}
+      td.b {{ font-weight: bold; color:#000; }}
       .sig {{ margin-top: 22mm; width:100%; }}
-      .sig td {{ width:50%; text-align:center; border-top: 1px solid #333; padding-top: 3px; font-weight: bold; font-size: 6.8px; }}
-      .ftr {{ margin-top: 8px; text-align:center; font-size: 5.6px; color:#777; }}
+      .sig td {{ width:50%; text-align:center; border-top: 1px solid #000; padding-top: 3px; font-weight: bold; font-size: 6.8px; color:#000; }}
+      .ftr {{ margin-top: 8px; text-align:center; font-size: 5.6px; color:#555; }}
       col.c-sno {{ width: 5%; }} col.c-exp {{ width: 14%; }} col.c-cat {{ width: 15%; }}
       col.c-desc {{ width: 24%; }} col.c-who {{ width: 17%; }} col.c-mode {{ width: 11%; }} col.c-amt {{ width: 14%; }}
     </style></head><body>

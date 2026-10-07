@@ -1,0 +1,164 @@
+BALAJI FEEHUB CLIENT 1.1.2 - RELEASE NOTES
+===========================================
+
+Installer:  BalajiFeeHub-Client-Setup.exe               (per-machine, Program Files, Windows x64)
+Portable:   BalajiFeeHub-Client-Windows-x64.zip         (extract and run, no installer)
+Version:    1.1.2 (cumulative release; previous: 1.1.1, 1.1.0 offline-first build, 1.0.2 original client)
+Hashes:     see SHA256SUMS.txt in the same folder.
+
+This is a CUMULATIVE release. It is a clean rebuild of the client from the
+complete current source (frontend + Electron shell), not a patch on top of the
+1.1.1 package. It carries forward every change in 1.1.0 and 1.1.1 plus the two
+fixes below. No feature from an earlier build was dropped: offline-first
+(bundled UI, offline login, cached data, offline receipts/expenses/bills,
+Pending Sync, automatic reconnect/sync, duplicate-safe sync, server-assigned
+receipt numbers, student version support, server-only screen protection) is
+unchanged and still present; only the Reports/Print path changed.
+
+Not used: the old .bcupdate client-update package. It is incompatible with
+this release (it replaces app.asar of the old remote-loading shell).
+
+1. 2026-10-07 FIX: Daily Fee & Expense Report print contrast (server-rendered PDF)
+-----------------------------------------------------------------------------------
+The printed/exported "Daily Fee & Expense Report" used light-gray table
+borders (#ccc/#999) and a near-black (not pure black) body text color, which
+printed faint on normal office laser printers. This is a server-side template
+fix (backend/routers/accounting.py, the /reports/daily-fee-expense/pdf
+endpoint used by BOTH the Reports page Print/Export buttons and the dedicated
+Daily Fee & Expense Report page) — no change in the Electron client package
+itself, but documented here since it is the same report this client prints.
+
+Changed, same layout and dimensions:
+- All body text, table text, section headings and the report title now use
+  solid black (#000), not the previous near-black #1a1a1a/#222/#333.
+- Every table border and the meta-info box border is now a solid dark line
+  (#000 for headers/section boxes/totals, #555 for ordinary grid lines),
+  replacing the previous light #ccc/#999 lines that faded when printed.
+- Section headings (A/B/C) and table header cells are explicitly bold + black.
+- TOTAL FEE COLLECTION, TOTAL EXPENSES and NET COLLECTION remain bold and are
+  now explicitly pure black.
+- Every amount figure in both tables (not only the totals) is now bold, so
+  all numbers print noticeably darker/heavier, not just the total rows.
+- The "No expenses recorded for this date" placeholder and the footer line
+  were darkened slightly (still deliberately lighter than body text, since
+  they are not report data) for readability without matching data-row weight.
+- No change to report data, calculations, filters, page size/margins, section
+  order or the Export endpoint's behavior — this is a CSS-only change to the
+  same HTML template Export already used.
+
+Verified by generating the actual PDF (not just visual inspection of markup)
+with real data (Cash 15,000 + UPI 3,500 = Total 18,500; Expenses 7,100; Net
+11,400) both before and after the change and rendering both to images for a
+side-by-side comparison: borders and numbers are solid/bold black after the
+fix versus light gray/thin before it. The underlying JSON report data was
+byte-identical in both renders (data and calculations untouched).
+
+NOTE: this fix lives in the backend (Main Server), not inside the client
+package, because the PDF is generated server-side. It must be deployed to the
+Main Server's backend to take effect; see the deployment note in the final
+report for this release.
+
+1a. 2026-10-07 FIX: Reports page Print button
+------------------------------------------------
+The Reports page "Print" button called the browser's own print on the Reports
+screen (sidebar, filters, on-screen cards) instead of the report. It now opens
+the exact same server-generated "Daily Fee & Expense Report" PDF that Export
+already produces (same endpoint, same date, same layout), and prints that
+document, the same proven approach already used on the Daily Fee & Expense
+Report page. Export is unchanged. Verified in the actual Electron client:
+window.print() is never called on the Reports screen, the same PDF request
+fires for Print and Export, and the opened document matches the report for
+both a date with transactions and a date with none.
+
+2. WHAT THIS CLIENT DOES
+------------------------
+- Opens its own bundled screens from BalajiFeeHub.exe. The Main Server is not
+  needed to open the program.
+- Server address is kept in %APPDATA%\BalajiFeeHub\config.json (default
+  192.168.0.116 port 8001). Change it in File > Server Settings. No restart needed.
+- Offline sign-in for users who have signed in on this PC before. The password is
+  never stored; only a salted PBKDF2 verifier, valid 90 days after the last online
+  sign-in. Wrong passwords are refused.
+- Cached data (IndexedDB): student search and view, fee position and ledger as of
+  the last sync, master data, bus master (read only).
+- Offline creates, queued and marked Pending Sync: receipts, expenses, bills.
+- Receipt numbers are assigned by the server at sync, using the same counters
+  as the online screens. Nothing is numbered on the PC.
+- Connection badge: Connected / Synced <time>; Syncing / N pending;
+  Offline / Server unavailable / N waiting; Sign in to sync; Sync problem.
+- Automatic reconnect: the client probes the server every 3-30 seconds while
+  offline and resumes at once. No restart and no Sync button are needed.
+- Duplicate-safe sync: every queued item has an ID that is re-sent on retry,
+  and the server applies each ID once. A payment already waiting on the PC is
+  not queued a second time.
+- Server-only screens (admin, settings, fee structure changes, bus master
+  edits, device administration, Master PIN, user roles) show a notice offline.
+  Any other write made offline is refused before it leaves the PC.
+- Student version field support (conflict detection preparation).
+- Backend sync changes included: bus routes and student version in the sync
+  snapshot; version increment on student profile edits.
+
+3. PRODUCTION EXCEL IMPORT (FY 2026-27) - COMPLETED ON THE SERVER
+-----------------------------------------------------------------
+Source: the 20 school Excel files ("Fee hub ... .xlsx"), the source of truth.
+- Data rows in the files: 2,482. Summary/total rows (not students): 20.
+  Valid student rows: 2,462.
+- Rows present in two files and identical: 98, counted once.
+- Distinct student records: 2,364. EVERY one is represented in FeeHub.
+- Students updated (existing FeeHub students, matched on admission number and
+  name): 2,255.
+- New students created: 108. Each has a new unique admission number "IMP-<number>",
+  because its Excel number is shared with a different existing student
+  (100 shared-number students) or with a same-number/different-name student (8).
+  The original Excel number is kept in source_admission_no.
+- Merged record: Saloni Santosh Uikey (Excel 9990) is the office-merged record of
+  9999 (Saloni Uikey). The merge is kept. Active 9999 carries her 2026-27 fee
+  position (paid 1,500, balance 0) and the source reference for 9990.
+  Record 9990 stays merged and hidden. No student was created for it.
+- Opening paid: Excel Total Paid minus the genuine FeeHub receipts, stored in the
+  2026-27 fee record. No receipts were created. Existing receipts (70, including
+  EP-2026-000012) and their numbers are unchanged.
+- Zero-fee Excel rows: 161, all imported. 156 existing students keep their FeeHub
+  fee (Excel 0 is treated as missing data, not overwritten).
+- Idempotent: running the corrected import again makes zero changes.
+- Every change has a before/after record in the excel_import_audit collection.
+- Backups before the import: C:\balaji-fee\rollback\fee-import-prod-backup-20261006-150401
+  and C:\balaji-fee\rollback\fee-import-prod-backup-20261006-165741
+- Students NOT imported: 0.
+
+4. KNOWN EXCEPTIONS (imported, but a field needs review)
+--------------------------------------------------------
+- 2 fee amounts with no exact existing fee structure (admission 3932: Excel 17,500
+  vs FeeHub 15,000; admission 1022: Excel 22,500 vs FeeHub 14,500). The students are
+  imported and keep their FeeHub structure. The Excel fee is in the fee record.
+  The displayed total follows the structure until a structure is confirmed.
+- 156 zero-fee Excel rows for existing students: FeeHub fee kept (see above).
+- 356 Excel "Bus From" values not matched to exactly one bus stop (276 not found,
+  80 area shared by several stops). Those students are imported; bus is unchanged;
+  the raw Excel value is in source_bus_from.
+- 10 identical duplicate fee-structure records already exist in FeeHub. Not deleted.
+- Section letters differ between Excel and FeeHub for some classes (example:
+  Class 1 English). Sections changed only where the mapping was exact.
+- Full list: fee-import-exceptions.csv and fee-import-final-report.md.
+
+5. FEE POSITION AFTER THE IMPORT (school, active students)
+------------------------------------------------------------
+                       Total Fee     Paid        Balance
+Before import          25,876,500    6,699,200   19,177,300
+After import           28,113,300   12,942,950   15,170,350
+Excel source           27,377,500   13,836,750   13,540,750 (2,364 distinct records)
+Paid matches the Excel Total Paid for every imported student.
+
+6. LIMITATIONS
+---------------
+- Offline sign-in uses the password saved on this PC: a password changed on the
+  server is accepted offline with the old password until the next online sign-in.
+- Role or permission changes take effect at the next online sign-in.
+- The sign-in session lasts 12 hours. After that, queued items wait for a sign-in
+  ("Sign in to sync"). They are not lost.
+- Offline receipts show no number until they are synced.
+- The sync pulls a full snapshot (about 2,300 students) every 30 seconds while
+  connected. It has not been load-tested on a LAN with many clients.
+- Clean Windows PC: the client bundles its own runtime; the installer and the
+  per-user test installer were both verified on the development PC. See the
+  final report for this release for the clean-PC install test result.
