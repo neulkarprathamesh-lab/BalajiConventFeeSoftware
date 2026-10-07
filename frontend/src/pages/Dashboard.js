@@ -90,15 +90,14 @@ export default function Dashboard() {
           </div>
         )}
         {/* lg (1024-1280px) stays at 3-up so each card keeps enough width for a
-            full ₹ amount on one line; only xl (1280px+) goes to the full 6-up
+            full ₹ amount on one line; only xl (1280px+) goes to the full 5-up
             row, where there is comfortably enough width per card regardless. */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-5 gap-4">
           <KPI testid="kpi-collection" label="Today's Collection" value={inr(d.collection_today)} hint={`${d.receipts_today_count} receipts issued`} icon={TrendingUp} tone="primary" />
           <KPI testid="kpi-receipts" label="Receipts Today" value={d.receipts_today_count} icon={Receipt} />
           <KPI testid="kpi-cash-today" label="Cash Received Today" value={inr(d.cash_collection_today)} icon={Banknote} tone="success" />
           <KPI testid="kpi-upi-today" label="UPI Received Today" value={inr(d.upi_collection_today)} icon={Smartphone} tone="success" />
           <KPI testid="kpi-pending" label="Pending Approvals" value={d.pending_approvals} hint={`${d.pending_adjustments} adj · ${d.pending_extensions} ext`} icon={Clock} tone="warning" />
-          <KPI testid="kpi-today" label="Due Today" value={d.due_today} icon={Bell} tone="warning" />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

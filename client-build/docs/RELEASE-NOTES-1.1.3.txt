@@ -1,0 +1,71 @@
+BALAJI FEEHUB CLIENT 1.1.3 - RELEASE NOTES
+===========================================
+
+Installer:  BalajiFeeHub-Client-Setup.exe               (per-machine, Program Files, Windows x64)
+Portable:   BalajiFeeHub-Client-Windows-x64.zip         (extract and run, no installer)
+Version:    1.1.3 (cumulative release; previous: 1.1.2, 1.1.1, 1.1.0 offline-first build, 1.0.2 original client)
+Hashes:     see SHA256SUMS.txt in the same folder.
+
+Clean rebuild from the complete current source. Carries forward every 1.1.2
+change (offline-first client, FY2026-27 import, Reports Print fix, Daily Fee
+& Expense Report print-contrast fix) unchanged, plus the Dashboard and
+Finance/Voucher changes below.
+
+1. 2026-10-07 Dashboard: Cash/UPI cards, removed Due Today/Tomorrow/Overdue
+--------------------------------------------------------------------------
+Dashboard top row is now exactly:
+  Today's Collection | Receipts Today | Cash Received Today | UPI Received
+  Today | Pending Approvals
+Due Today, Due Tomorrow and Overdue no longer appear on the Dashboard.
+Cash Received Today and UPI Received Today are computed from today's active
+receipts only (same refund/debit-voucher exclusion as Today's Collection and
+the Daily Fee & Expense Report - a voucher paid "in cash" is never counted
+as a cash fee collection).
+
+2. 2026-10-07 Dashboard: KPI amount clipping fixed
+---------------------------------------------------
+Today's Collection (and every KPI card) could clip a large ₹ amount against
+the card edge on a narrower screen/grid width. Each value's font size now
+scales to the card's own width (CSS container query units), never the
+viewport, so a long amount always fits on one line - never truncated or
+hidden. Verified with a six-figure amount (₹2,42,021.00) at the narrowest
+supported card width with no clipping.
+
+3. 2026-10-07 Cashier can create Debit Vouchers
+--------------------------------------------------
+Finance/Voucher's "Issue Debit Voucher" now accepts the cashier role (server-
+assigned voucher number, same numbering, same approval trail as before - no
+second voucher system). Refund creation is unchanged and still requires
+manager/administrator. No other cashier permission changed: protected
+student-profile edits, master-data deletion, user/device management and the
+Master PIN all keep their own separate checks.
+
+VERIFICATION
+Frontend Jest: 96/96. Electron config (node --test): 9/9. Backend (bus
+registry + Excel import): 68/68. Live-tested from the portable ZIP build in
+a fully isolated location (extracted to a scratch folder, isolated config
+directory and user-data directory, pointed at an isolated rehearsal
+database) - the existing installed client on this machine was never
+touched, reinstalled or uninstalled for this verification. Confirmed:
+correct card order and set, no clipping at a six-figure amount, correct
+cash/UPI split against synthetic test receipts (including a debit voucher
+paid in cash correctly excluded from both Today's Collection and Cash
+Received Today), a test cashier account successfully issued a voucher while
+a refund attempt by the same account was still rejected (403). All test
+receipts/vouchers were in the isolated rehearsal database only and were
+deleted/cancelled immediately after verification - no production data was
+read, created or modified by this verification.
+
+IMPORTANT - server-side pieces not yet live
+This installer only changes the CLIENT. Two further pieces live on the Main
+Server and were NOT part of this installer build - they need their own
+separate deployment to actually take effect for anyone using the Main
+Server's web frontend or talking to the live backend:
+  - backend/routers/reports.py and receipts.py (Cash/UPI split, cashier
+    voucher permission) - not yet deployed to the live backend.
+  - frontend/build (the static web bundle served by BalajiFeeHub-Frontend
+    for browser/LAN-web access) - not yet rebuilt/deployed; still serving a
+    2026-10-03 build without these changes.
+Until those are deployed, Cash/UPI will show ₹0.00 and the old Dashboard
+layout will still appear for anyone using the web frontend or an older
+client pointed at the live backend.
