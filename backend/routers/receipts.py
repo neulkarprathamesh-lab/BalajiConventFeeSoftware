@@ -316,9 +316,17 @@ async def create_receipt(body: ReceiptIn, user = Depends(require_roles("administ
                     f"balance (₹{current_outstanding:,.2f}). Please enter an amount up to the outstanding balance."
                 )
 
-    if body.receipt_type in ("refund","debit_voucher"):
+    if body.receipt_type == "refund":
         if user["role"] not in ("administrator","manager"):
-            raise HTTPException(403, "Refund/voucher requires manager or admin")
+            raise HTTPException(403, "Refund requires manager or admin")
+    if body.receipt_type == "debit_voucher":
+        # Cashier may issue Debit Vouchers (Finance/Voucher page) - refunds
+        # stay manager/admin only, unchanged. This does not touch any other
+        # cashier permission: protected student-profile edits, master-data
+        # deletion, user/device management and Master PIN all remain gated
+        # by their own separate administrator/PIN checks elsewhere.
+        if user["role"] not in ("administrator","manager","cashier"):
+            raise HTTPException(403, "Voucher requires cashier, manager, or admin")
     ay = dept.get("academic_year", "2026-27")
 
     # class_doc is needed by the receipt-type eligibility check below, and is

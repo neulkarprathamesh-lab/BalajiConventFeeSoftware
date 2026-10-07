@@ -20,6 +20,17 @@ async def dashboard(user = Depends(get_current_user)):
     # Collection, Receipts Today, and Recent Receipts must never disagree about what "today" means.
     receipts_today = await db.receipts.find({"created_at": today_bound, "status":{"$ne":"cancelled"}}, {"_id":0}).to_list(2000)
     collection_today = sum(r.get("total",0) for r in receipts_today if r.get("receipt_type") not in ("refund","debit_voucher"))
+    # Same payment-mode split/exclusions as the Daily Fee & Expense Report
+    # (routers/accounting.py): refunds and debit vouchers are never a fee
+    # collection, and a cancelled receipt is already excluded above.
+    cash_collection_today = sum(
+        r.get("total", 0) for r in receipts_today
+        if r.get("receipt_type") not in ("refund", "debit_voucher") and (r.get("payment_mode") or "").lower() == "cash"
+    )
+    upi_collection_today = sum(
+        r.get("total", 0) for r in receipts_today
+        if r.get("receipt_type") not in ("refund", "debit_voucher") and (r.get("payment_mode") or "").lower() == "upi"
+    )
     pending_adj = await db.adjustments.count_documents({"status":"pending"})
     pending_ext = await db.extensions.count_documents({"status":"pending"})
     reminders = await db.reminders.find({"status":"pending"}, {"_id":0}).to_list(2000)
@@ -37,6 +48,8 @@ async def dashboard(user = Depends(get_current_user)):
         dept_totals[r.get("department_name","-")] = dept_totals.get(r.get("department_name","-"),0) + r.get("total",0)
     return {
         "collection_today": collection_today,
+        "cash_collection_today": cash_collection_today,
+        "upi_collection_today": upi_collection_today,
         "receipts_today_count": len([x for x in receipts_today if x.get("receipt_type") not in ("refund","debit_voucher")]),
         "pending_approvals": pending_adj + pending_ext,
         "pending_adjustments": pending_adj, "pending_extensions": pending_ext,

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
-import { TrendingUp, Receipt, Bell, AlertTriangle, Clock, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { TrendingUp, Receipt, Bell, AlertTriangle, Clock, CheckCircle2, ShieldAlert, Banknote, Smartphone } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import OnboardingPopover from '@/components/OnboardingPopover';
@@ -16,13 +16,22 @@ const KPI = ({ label, value, hint, icon: Icon, tone = 'default', testid }) => {
     primary: 'text-blue-700',
   };
   return (
-    <div data-testid={testid} className="bg-white border border-slate-200 rounded p-4 hover:shadow-sm transition-shadow duration-150">
+    <div data-testid={testid} className="bg-white border border-slate-200 rounded p-4 hover:shadow-sm transition-shadow duration-150 min-w-0" style={{ containerType: 'inline-size' }}>
       <div className="flex items-start justify-between mb-2">
         <div className="text-[11px] tracking-widest uppercase text-slate-500 font-medium">{label}</div>
-        <Icon className="w-4 h-4 text-slate-400" strokeWidth={1.75} />
+        <Icon className="w-4 h-4 text-slate-400 shrink-0" strokeWidth={1.75} />
       </div>
-      <div className={`font-heading text-3xl font-semibold tabular tracking-tight ${tones[tone]}`}>{value}</div>
-      {hint && <div className="text-[11px] text-slate-500 mt-1">{hint}</div>}
+      {/* The value's font size scales down to the card's own width (CSS container
+          query units), not the viewport, so a long ₹ amount on a narrow card
+          (e.g. the 6-up grid on a laptop screen) shrinks to fit on one line
+          instead of being clipped by the card edge - never truncated/hidden. */}
+      <div
+        className={`font-heading font-semibold tabular tracking-tight whitespace-nowrap ${tones[tone]}`}
+        style={{ fontSize: 'clamp(1.05rem, 11cqw, 1.875rem)' }}
+      >
+        {value}
+      </div>
+      {hint && <div className="text-[11px] text-slate-500 mt-1 truncate">{hint}</div>}
     </div>
   );
 };
@@ -80,13 +89,16 @@ export default function Dashboard() {
             <button onClick={() => nav('/adjustments')} className="h-9 px-3 bg-amber-600 hover:bg-amber-700 text-white text-sm rounded">Review →</button>
           </div>
         )}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        {/* lg (1024-1280px) stays at 3-up so each card keeps enough width for a
+            full ₹ amount on one line; only xl (1280px+) goes to the full 6-up
+            row, where there is comfortably enough width per card regardless. */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-6 gap-4">
           <KPI testid="kpi-collection" label="Today's Collection" value={inr(d.collection_today)} hint={`${d.receipts_today_count} receipts issued`} icon={TrendingUp} tone="primary" />
           <KPI testid="kpi-receipts" label="Receipts Today" value={d.receipts_today_count} icon={Receipt} />
+          <KPI testid="kpi-cash-today" label="Cash Received Today" value={inr(d.cash_collection_today)} icon={Banknote} tone="success" />
+          <KPI testid="kpi-upi-today" label="UPI Received Today" value={inr(d.upi_collection_today)} icon={Smartphone} tone="success" />
           <KPI testid="kpi-pending" label="Pending Approvals" value={d.pending_approvals} hint={`${d.pending_adjustments} adj · ${d.pending_extensions} ext`} icon={Clock} tone="warning" />
           <KPI testid="kpi-today" label="Due Today" value={d.due_today} icon={Bell} tone="warning" />
-          <KPI testid="kpi-tomorrow" label="Due Tomorrow" value={d.due_tomorrow} icon={Bell} />
-          <KPI testid="kpi-overdue" label="Overdue" value={d.overdue} icon={AlertTriangle} tone="danger" />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

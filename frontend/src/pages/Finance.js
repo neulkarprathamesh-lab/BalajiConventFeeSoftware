@@ -2,13 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { PageHeader, inr } from '@/components/Layout';
-import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
 import { Wallet, Plus, Trash2, Search, Building2 } from 'lucide-react';
 
 export default function Finance() {
   const nav = useNavigate();
-  const { user } = useAuth();
   const [dvType, setDvType] = useState(null);
   const [payee, setPayee] = useState('');
   const [department, setDepartment] = useState('');
@@ -66,9 +64,6 @@ export default function Finance() {
         subtitle={dvType ? `Prefix: ${dvType.code} · ${dvType.description || 'Expense / refund / vendor payment'}` : 'Loading…'}
       />
       <div className="p-6 max-w-3xl">
-        {user?.role === 'cashier' && (
-          <div className="bg-red-50 border border-red-200 rounded p-3 text-[13px] text-red-800 mb-4">Debit vouchers require Manager or Administrator role.</div>
-        )}
         <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Payee / Vendor Name" required>
